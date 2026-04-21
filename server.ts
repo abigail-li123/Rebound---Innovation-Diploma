@@ -16,7 +16,21 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Log all API requests for diagnostics
+  app.use('/api', (req, res, next) => {
+    console.log(`[API ${req.method}] ${req.path} - ${new Date().toISOString()}`);
+    next();
+  });
+
   // --- API Routes ---
+
+  app.get('/api/ping', (req, res) => {
+    res.json({ 
+      status: 'online', 
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development'
+    });
+  });
 
   // Get Canvas Auth URL
   app.get('/api/auth/canvas/url', (req, res) => {
