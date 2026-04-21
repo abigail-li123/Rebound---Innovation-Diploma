@@ -359,14 +359,20 @@ export default function App() {
     }
   };
 
+  const [loginError, setLoginError] = useState<string | null>(null);
+
   const handleSignIn = async () => {
+    setLoginError(null);
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (e: any) {
       if (e.code === 'auth/popup-closed-by-user') {
-        // Silently handle - user just closed the window
         console.log('Login cancelled by user');
+      } else if (e.code === 'auth/unauthorized-domain') {
+        setLoginError('This domain is not authorized in Firebase. Please add this URL to your Firebase Console > Auth > Settings > Authorized Domains.');
+        console.error('Unauthorized domain:', window.location.hostname);
       } else {
+        setLoginError('Initialization failed. Check your connection or security keys.');
         console.error('Login error:', e);
       }
     }
@@ -399,6 +405,19 @@ export default function App() {
           </div>
           
           <div className="space-y-4">
+            {loginError && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="p-4 bg-red-50 border border-red-100 rounded-2xl text-[10px] font-bold text-red-500 uppercase tracking-wider leading-relaxed"
+              >
+                <div className="flex items-center gap-2 mb-1 justify-center">
+                  <AlertCircle size={14} /> Critical Error
+                </div>
+                {loginError}
+              </motion.div>
+            )}
+
             <button 
               onClick={handleSignIn}
               className="w-full bg-slate-900 text-white py-6 rounded-[1.8rem] font-black uppercase text-xs tracking-[0.25em] shadow-2xl shadow-slate-900/30 hover:scale-[1.03] transition-all active:scale-95 flex items-center justify-center gap-4 group"
