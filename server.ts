@@ -100,17 +100,31 @@ async function startServer() {
 
   // Proxy to fetch assignments (via direct Manual Access Token)
   app.post('/api/canvas/sync-token', async (req, res) => {
-    const { accessToken, canvasUrl } = req.body;
+    let { accessToken, canvasUrl } = req.body;
     if (!accessToken || !canvasUrl) {
       return res.status(400).json({ error: 'Missing token or URL' });
     }
 
+    accessToken = accessToken.trim();
+    canvasUrl = canvasUrl.trim();
+
+    // Normalize URL
     try {
+      const url = new URL(canvasUrl);
+      canvasUrl = `${url.protocol}//${url.hostname}`;
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid Canvas URL format. Ensure it starts with http:// or https://' });
+    }
+
+    try {
+      console.log(`Attempting Canvas sync for host: ${canvasUrl}`);
       const assignments = await fetchCanvasAssignments(canvasUrl, accessToken);
       res.json({ assignments });
     } catch (error: any) {
-      console.error('Manual sync error:', error.response?.data || error.message);
-      res.status(500).json({ error: 'Failed to sync with Canvas using provided token' });
+      const status = error.response?.status || 500;
+      const message = error.response?.data?.errors?.[0]?.message || error.response?.data?.message || error.message;
+      console.error('Manual sync error detailed:', message);
+      res.status(status).json({ error: `Canvas Error: ${message}` });
     }
   });
 
@@ -118,13 +132,14 @@ async function startServer() {
     // 1. Fetch Courses
     const coursesRes = await axios.get(`${canvasUrl}/api/v1/courses`, {
       headers: { Authorization: `Bearer ${accessToken}` },
-      params: { enrollment_state: 'active' }
+      params: { enrollment_state: 'active', per_page: 50 }
     });
 
+    const courses = Array.isArray(coursesRes.data) ? coursesRes.data : [];
+    
     // 2. Fetch Assignments for each active course
-    let allAssignments: any[] = [];
-    const coursePromises = (coursesRes.data || [])
-      .filter((c: any) => c.id && (c.name || c.course_code))
+    const coursePromises = courses
+      .filter((c: any) => c && c.id && (c.name || c.course_code))
       .map(async (course: any) => {
         try {
           const assRes = await axios.get(`${canvasUrl}/api/v1/courses/${course.id}/assignments`, {
@@ -133,7 +148,8 @@ async function startServer() {
             // For a student who was absent, "overdue" and "future" are critical.
             params: { 
               "all_assignments": true,
-              "order_by": "due_at" 
+              "order_by": "due_at",
+              "include[]": "submission"
             }
           });
           
@@ -151,7 +167,7 @@ async function startServer() {
       });
 
     const results = await Promise.all(coursePromises);
-    allAssignments = results.flat();
+    const allAssignments = results.flat();
     return allAssignments;
   }
 

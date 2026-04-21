@@ -174,14 +174,16 @@ export default function App() {
         body: JSON.stringify({ accessToken: manualToken, canvasUrl })
       });
       
-      if (!response.ok) throw new Error('Sync failed');
-      const { assignments: canvasQuests } = await response.json();
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Sync failed');
+      
+      const { assignments: canvasQuests } = data;
       await processCanvasQuests(canvasQuests);
       // Auto-trigger AI Analysis after successful manual sync
       setTimeout(() => runTacticalAnalysis(), 500);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Manual sync error:', error);
-      alert('Failed to sync assignments. Ensure your Manual Token and Canvas URL are correct.');
+      alert(`Failed to sync: ${error.message}`);
     } finally {
       setIsSyncing(false);
     }
@@ -197,7 +199,9 @@ export default function App() {
       const questRef = doc(db, `users/${user.uid}/quests/${questId}`);
       
       const due = cq.due_at ? new Date(cq.due_at) : null;
-      const isOverdue = due && due < now && !cq.has_submitted_submissions;
+      // Robust completion check: check has_submitted_submissions OR existence of a submission object with points/grade
+      const isCompleted = cq.has_submitted_submissions || (cq.submission && (cq.submission.workflow_state === 'graded' || cq.submission.workflow_state === 'submitted'));
+      const isOverdue = due && due < now && !isCompleted;
 
       batch.set(questRef, {
         title: cq.name,
@@ -205,7 +209,7 @@ export default function App() {
         priority: isOverdue ? 5 : 3, // Overdue becomes "Critical Threat" (5)
         workload: 3, 
         points: 300,
-        status: cq.has_submitted_submissions ? 'completed' : 'todo',
+        status: isCompleted ? 'completed' : 'todo',
         dueDate: cq.due_at ? cq.due_at.split('T')[0] : 'No Due Date',
         source: 'canvas',
         externalId: String(cq.id)
