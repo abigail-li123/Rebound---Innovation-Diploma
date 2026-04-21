@@ -79,6 +79,7 @@ export default function App() {
   const [manualToken, setManualToken] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [showCanvasSetup, setShowCanvasSetup] = useState(false);
+  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
 
   // Tactical Strategist state
   const [analyzingTactics, setAnalyzingTactics] = useState(false);
@@ -131,6 +132,7 @@ export default function App() {
   const handleManualTokenSync = async () => {
     if (!user || !manualToken || !canvasUrl) return;
     setIsSyncing(true);
+    setLastSyncError(null);
     try {
       const response = await fetch('/api/canvas/sync-token', {
         method: 'POST',
@@ -158,7 +160,7 @@ export default function App() {
       setTimeout(() => runTacticalAnalysis(), 500);
     } catch (error: any) {
       console.error('Manual sync error detailed:', error);
-      alert(`Tactical Sync Failure: ${error.message}`);
+      setLastSyncError(error.message);
     } finally {
       setIsSyncing(false);
     }
@@ -735,7 +737,10 @@ export default function App() {
                           type="text" 
                           placeholder="https://canvas.instructure.com"
                           value={canvasUrl}
-                          onChange={(e) => setCanvasUrl(e.target.value)}
+                          onChange={(e) => {
+                            setCanvasUrl(e.target.value);
+                            setLastSyncError(null);
+                          }}
                           className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-6 py-5 text-sm font-bold focus:outline-none focus:border-indigo-400 focus:bg-white text-slate-800"
                         />
                         <Settings className="absolute right-6 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
@@ -749,10 +754,36 @@ export default function App() {
                           type="password" 
                           placeholder="Paste your token here..."
                           value={manualToken}
-                          onChange={(e) => setManualToken(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-6 py-5 text-sm font-bold focus:outline-none focus:border-indigo-400 focus:bg-white text-slate-800"
+                          onChange={(e) => {
+                            setManualToken(e.target.value);
+                            setLastSyncError(null);
+                          }}
+                          className={`w-full bg-slate-50 border rounded-2xl px-6 py-5 text-sm font-bold focus:outline-none focus:bg-white text-slate-800 transition-colors ${lastSyncError ? 'border-rose-400' : 'border-slate-100 focus:border-indigo-400'}`}
                         />
                     </div>
+
+                    {lastSyncError && (
+                      <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl space-y-2">
+                        <div className="flex items-center gap-2 text-rose-600 font-black text-[10px] uppercase tracking-widest">
+                           <AlertCircle size={14} /> 
+                           Failed: {lastSyncError}
+                        </div>
+                        {lastSyncError.toLowerCase().includes('token') && (
+                          <div className="text-[9px] text-slate-500 font-bold leading-tight">
+                            • Ensure the token is copied exactly without spaces.<br/>
+                            • Check if the token has expired in your Canvas settings.<br/>
+                            • Ensure it is a "Manual Token" from Approved Integrations.
+                          </div>
+                        )}
+                        {lastSyncError.toLowerCase().includes('invalid canvas url') && (
+                          <div className="text-[9px] text-slate-500 font-bold leading-tight">
+                            • URL should look like: https://school.instructure.com<br/>
+                            • Ensure there are no typos in the domain name.
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight px-1">
                       Get yours at <span className="text-indigo-500">Settings &gt; Approved Integrations &gt; + New Token</span> in Canvas.
                     </p>
