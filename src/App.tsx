@@ -79,7 +79,6 @@ export default function App() {
   const [manualToken, setManualToken] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [showCanvasSetup, setShowCanvasSetup] = useState(false);
-  const [syncMethod, setSyncMethod] = useState<'oauth' | 'token'>('token');
 
   // Tactical Strategist state
   const [analyzingTactics, setAnalyzingTactics] = useState(false);
@@ -128,41 +127,6 @@ export default function App() {
       unsubscribeConfig();
     };
   }, [user]);
-
-  // Handle Canvas Auth Listener
-  useEffect(() => {
-    const handleMessage = async (event: MessageEvent) => {
-      if (event.data?.type === 'CANVAS_AUTH_SUCCESS') {
-        const { code } = event.data;
-        await handleCanvasSync(code);
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [user, canvasUrl]);
-
-  const handleCanvasSync = async (code: string) => {
-    if (!user) return;
-    setIsSyncing(true);
-    try {
-      const response = await fetch('/api/canvas/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, canvasUrl })
-      });
-      
-      if (!response.ok) throw new Error('Sync failed');
-      const { assignments: canvasQuests } = await response.json();
-      await processCanvasQuests(canvasQuests);
-      // Auto-trigger AI Analysis after successful OAuth sync
-      setTimeout(() => runTacticalAnalysis(), 500);
-    } catch (error) {
-      console.error('Canvas sync error:', error);
-      alert('Failed to sync assignments. Check your Canvas URL or try again.');
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const handleManualTokenSync = async () => {
     if (!user || !manualToken || !canvasUrl) return;
@@ -230,16 +194,6 @@ export default function App() {
     await batch.commit();
     setShowCanvasSetup(false);
     setManualToken('');
-  };
-
-  const connectCanvas = async () => {
-    try {
-      const res = await fetch(`/api/auth/canvas/url?canvasUrl=${encodeURIComponent(canvasUrl)}`);
-      const { url } = await res.json();
-      window.open(url, 'canvas_auth', 'width=800,height=700');
-    } catch (e) {
-      alert('Error initiating Canvas connection.');
-    }
   };
 
   // Sorting logic
@@ -773,21 +727,6 @@ export default function App() {
               </div>
 
               <div className="space-y-8">
-                <div className="flex bg-slate-100 p-1 rounded-2xl">
-                  <button 
-                    onClick={() => setSyncMethod('token')}
-                    className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${syncMethod === 'token' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}
-                  >
-                    Manual Token
-                  </button>
-                  <button 
-                    onClick={() => setSyncMethod('oauth')}
-                    className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${syncMethod === 'oauth' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}
-                  >
-                    OAuth App
-                  </button>
-                </div>
-
                 <div className="space-y-6">
                   <div className="space-y-2">
                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest pl-1">Institution Canvas URL</label>
@@ -803,45 +742,29 @@ export default function App() {
                      </div>
                   </div>
 
-                  {syncMethod === 'token' ? (
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                         <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest pl-1">Canvas Access Token</label>
-                         <input 
-                            type="password" 
-                            placeholder="Paste your token here..."
-                            value={manualToken}
-                            onChange={(e) => setManualToken(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-6 py-5 text-sm font-bold focus:outline-none focus:border-indigo-400 focus:bg-white text-slate-800"
-                          />
-                      </div>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight px-1">
-                        Get yours at <span className="text-indigo-500">Settings &gt; Approved Integrations &gt; + New Token</span> in Canvas.
-                      </p>
-                      <button 
-                        onClick={handleManualTokenSync}
-                        disabled={isSyncing || !manualToken}
-                        className="w-full bg-slate-900 text-white py-6 rounded-[1.8rem] font-black uppercase text-xs tracking-[0.2em] shadow-xl shadow-slate-900/20 hover:scale-[1.02] transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-3"
-                      >
-                        {isSyncing ? <RefreshCw className="animate-spin" size={18} /> : <Zap size={18} />}
-                        Sync Quests (Manual)
-                      </button>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest pl-1">Canvas Access Token</label>
+                        <input 
+                          type="password" 
+                          placeholder="Paste your token here..."
+                          value={manualToken}
+                          onChange={(e) => setManualToken(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-6 py-5 text-sm font-bold focus:outline-none focus:border-indigo-400 focus:bg-white text-slate-800"
+                        />
                     </div>
-                  ) : (
-                    <div className="space-y-4">
-                       <p className="text-sm font-bold text-slate-600 leading-relaxed">
-                         Requires a pre-configured Canvas Developer Key (Client ID/Secret) in the server environment.
-                       </p>
-                       <button 
-                        onClick={connectCanvas}
-                        disabled={isSyncing}
-                        className="w-full bg-indigo-600 text-white py-6 rounded-[1.8rem] font-black uppercase text-xs tracking-[0.2em] shadow-xl shadow-indigo-600/20 hover:scale-[1.02] transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-3"
-                      >
-                        {isSyncing ? <RefreshCw className="animate-spin" size={18} /> : <RefreshCw size={18} />}
-                        Authorize Connection
-                      </button>
-                    </div>
-                  )}
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight px-1">
+                      Get yours at <span className="text-indigo-500">Settings &gt; Approved Integrations &gt; + New Token</span> in Canvas.
+                    </p>
+                    <button 
+                      onClick={handleManualTokenSync}
+                      disabled={isSyncing || !manualToken}
+                      className="w-full bg-slate-900 text-white py-6 rounded-[1.8rem] font-black uppercase text-xs tracking-[0.2em] shadow-xl shadow-slate-900/20 hover:scale-[1.02] transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-3"
+                    >
+                      {isSyncing ? <RefreshCw className="animate-spin" size={18} /> : <Zap size={18} />}
+                      Sync Quests (Manual)
+                    </button>
+                  </div>
                 </div>
               </div>
             </motion.div>
