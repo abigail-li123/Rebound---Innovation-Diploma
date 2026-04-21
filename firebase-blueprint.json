@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "user_config": {
+      "title": "User Configuration",
+      "description": "Stores user-specific settings like Canvas URL and sync tokens",
+      "type": "object",
+      "properties": {
+        "canvasUrl": { "type": "string" },
+        "syncEnabled": { "type": "boolean" },
+        "lastSync": { "type": "string", "format": "date-time" }
+      }
+    },
+    "quest": {
+      "title": "Quest",
+      "description": "An assignment quest",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "subject": { "type": "string" },
+        "priority": { "type": "integer" },
+        "workload": { "type": "integer" },
+        "points": { "type": "integer" },
+        "status": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "source": { "type": "string" },
+        "externalId": { "type": "string" }
+      },
+      "required": ["title", "subject", "priority", "status"]
+    }
+  },
+  "firestore": {
+    "users/{userId}/config/main": {
+      "schema": "user_config",
+      "description": "Per-user configuration"
+    },
+    "users/{userId}/quests/{questId}": {
+      "schema": "quest",
+      "description": "Assignments for a specific user"
+    }
+  }
+}

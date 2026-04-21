@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // User Data
+    match /users/{userId} {
+      
+      match /config/main {
+        allow get: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidConfig(request.resource.data);
+      }
+      
+      match /quests/{questId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidQuest(request.resource.data);
+        allow update: if isOwner(userId) && isValidQuest(request.resource.data) && (
+          // Allow status toggling
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'points']) ||
+          // Allow full editing
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'subject', 'priority', 'workload', 'dueDate', 'points', 'status'])
+        );
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    function isValidConfig(data) {
+      return data.keys().hasAll(['canvasUrl']) && 
+             data.canvasUrl is string && 
+             data.canvasUrl.size() < 512;
+    }
+
+    function isValidQuest(data) {
+      return data.keys().hasAll(['title', 'subject', 'priority', 'status']) &&
+             data.title is string && data.title.size() <= 200 &&
+             data.subject is string && data.subject.size() <= 100 &&
+             data.priority is int && data.priority >= 1 && data.priority <= 5 &&
+             data.status in ['todo', 'completed'] &&
+             (!data.keys().contains('workload') || (data.workload is int && data.workload >= 1 && data.workload <= 5)) &&
+             (!data.keys().contains('points') || (data.points is int));
+    }
+  }
+}

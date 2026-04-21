@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-bento-bg: #F8FAFC;
+  --color-bento-card: #FFFFFF;
+  --color-bento-border: #E2E8F0;
+  --color-bento-green: #10B981;
+  --color-bento-blue: #0EA5E9;
+  --color-bento-pink: #EC4899;
+  --color-bento-orange: #F59E0B;
+}
+
+@layer base {
+  body {
+    @apply bg-bento-bg text-slate-800 antialiased;
+  }
+}
+
+/* Bento custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-200 rounded-full hover:bg-slate-300 transition-colors;
+}
+
+/* Slider Overrides */
+input[type='range'] {
+  @apply h-2 bg-slate-100 rounded-full appearance-none cursor-pointer;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  @apply w-5 h-5 bg-white border-2 border-bento-pink shadow-md rounded-full appearance-none cursor-pointer hover:scale-110 transition-transform;
+}
+
+.glass-panel {
+  @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.05)];
+}
