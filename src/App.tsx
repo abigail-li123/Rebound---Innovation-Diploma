@@ -359,6 +359,19 @@ export default function App() {
     }
   };
 
+  const handleSignIn = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e: any) {
+      if (e.code === 'auth/popup-closed-by-user') {
+        // Silently handle - user just closed the window
+        console.log('Login cancelled by user');
+      } else {
+        console.error('Login error:', e);
+      }
+    }
+  };
+
   // Diplomacy Overlay
   if (!user) {
     return (
@@ -387,7 +400,7 @@ export default function App() {
           
           <div className="space-y-4">
             <button 
-              onClick={() => signInWithPopup(auth, googleProvider)}
+              onClick={handleSignIn}
               className="w-full bg-slate-900 text-white py-6 rounded-[1.8rem] font-black uppercase text-xs tracking-[0.25em] shadow-2xl shadow-slate-900/30 hover:scale-[1.03] transition-all active:scale-95 flex items-center justify-center gap-4 group"
             >
               Initialize Identity <ArrowRight className="group-hover:translate-x-2 transition-transform" />
