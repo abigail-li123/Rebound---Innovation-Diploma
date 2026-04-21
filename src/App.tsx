@@ -174,16 +174,27 @@ export default function App() {
         body: JSON.stringify({ accessToken: manualToken, canvasUrl })
       });
       
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Sync failed');
+      const contentType = response.headers.get('content-type');
+      let data;
+      
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        // Not JSON - likely an HTML error page or proxy error
+        const text = await response.text();
+        console.error('Non-JSON response received:', text.substring(0, 500));
+        throw new Error(`Server returned unexpected response (Status: ${response.status}). This often happens if the session timed out or the domain is blocked.`);
+      }
+
+      if (!response.ok) throw new Error(data?.error || `Sync failed (Status: ${response.status})`);
       
       const { assignments: canvasQuests } = data;
       await processCanvasQuests(canvasQuests);
       // Auto-trigger AI Analysis after successful manual sync
       setTimeout(() => runTacticalAnalysis(), 500);
     } catch (error: any) {
-      console.error('Manual sync error:', error);
-      alert(`Failed to sync: ${error.message}`);
+      console.error('Manual sync error detailed:', error);
+      alert(`Tactical Sync Failure: ${error.message}`);
     } finally {
       setIsSyncing(false);
     }

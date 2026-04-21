@@ -110,10 +110,21 @@ async function startServer() {
 
     // Normalize URL
     try {
-      const url = new URL(canvasUrl);
-      canvasUrl = `${url.protocol}//${url.hostname}`;
+      // Ensure the URL has a protocol
+      let targetUrl = canvasUrl;
+      if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+        targetUrl = 'https://' + targetUrl;
+      }
+      const url = new URL(targetUrl);
+      // Construct base URL preserving protocol, hostname, port, and pathname (for subpath installs)
+      // We trim trailing slashes to avoid issues when appending /api/v1/...
+      let normalized = `${url.protocol}//${url.host}${url.pathname}`;
+      if (normalized.endsWith('/')) {
+        normalized = normalized.slice(0, -1);
+      }
+      canvasUrl = normalized;
     } catch (e) {
-      return res.status(400).json({ error: 'Invalid Canvas URL format. Ensure it starts with http:// or https://' });
+      return res.status(400).json({ error: 'Invalid Canvas URL format. Please provide a valid URL like https://school.instructure.com' });
     }
 
     try {
