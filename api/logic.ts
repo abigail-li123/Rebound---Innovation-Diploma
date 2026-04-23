@@ -1,6 +1,7 @@
 // api/logic.ts
 import express from 'express';
 import axios from 'axios';
+import { GoogleGenAI } from '@google/genai';
 
 export const apiRouter = express.Router();
 
