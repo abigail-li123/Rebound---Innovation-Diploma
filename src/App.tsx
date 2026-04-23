@@ -80,6 +80,7 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showCanvasSetup, setShowCanvasSetup] = useState(false);
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
+  const [mentalStamina, setMentalStamina] = useState(100);
 
   // Tactical Strategist state
   const [analyzingTactics, setAnalyzingTactics] = useState(false);
@@ -120,6 +121,7 @@ export default function App() {
       if (snapshot.exists()) {
         const data = snapshot.data();
         if (data.canvasUrl) setCanvasUrl(data.canvasUrl);
+        if (data.mentalStamina !== undefined) setMentalStamina(data.mentalStamina);
       }
     });
 
@@ -234,8 +236,18 @@ export default function App() {
   const completeAssignment = async (id: string, assignmentPoints: number) => {
     if (!user) return;
     try {
+      const assignment = assignments.find(a => a.id === id);
+      const workload = assignment?.workload || 3;
+      const staminaDrain = workload * 5; // e.g., workload 5 drains 25%
+      const newStamina = Math.max(0, mentalStamina - staminaDrain);
+      setMentalStamina(newStamina);
+
       const questRef = doc(db, `users/${user.uid}/quests/${id}`);
+      const configRef = doc(db, `users/${user.uid}/config/main`);
+
       await updateDoc(questRef, { status: 'completed' });
+      await setDoc(configRef, { mentalStamina: newStamina }, { merge: true });
+
       if (recommendedId === id) {
         setRecommendedId(null);
         setTacticalAdvice(null);
@@ -243,6 +255,14 @@ export default function App() {
     } catch (e) {
       console.error('Error completing assignment:', e);
     }
+  };
+
+  const takeBreak = async () => {
+    if (!user) return;
+    const newStamina = Math.min(100, mentalStamina + 25); // Recovers 25%
+    setMentalStamina(newStamina);
+    const configRef = doc(db, `users/${user.uid}/config/main`);
+    await setDoc(configRef, { mentalStamina: newStamina }, { merge: true });
   };
 
   const deleteAssignment = async (id: string) => {
@@ -300,19 +320,27 @@ export default function App() {
     }
   };
 
-  const generateEmail = async (assignment: Assignment) => {
+  const generateEmail = async (assignment: Assignment, type: 'extension' | 'office-hours' = 'extension') => {
     setIsGenerating(true);
     setShowEmailTool(true);
     setSelectedForEmail(assignment);
     
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-      const prompt = `You are a helpful academic advisor. Write a polite, professional, and concise email template for a student to ask their teacher for an extension on the following assignment. 
+      
+      const typePrompt = type === 'extension' 
+        ? `Write a polite, professional, and concise email template for a student to ask their teacher for an extension on the following assignment. 
+           The email should explain the student was absent and request a specific number of extra days (e.g. 3-5).`
+        : `Write a polite, professional email template for a student to ask their teacher when they have office hours available this week. 
+           The student wants to drop by to discuss an assignment. 
+           IMPORTANT: Do NOT use the phrases "status check" or "help briefing". 
+           The email MUST include clear [BRACKETED PLACEHOLDERS] for the [Assignment Name] and a [Brief Description of what you want to discuss].`;
+
+      const prompt = `You are a helpful academic advisor. ${typePrompt}
         Assignment: ${assignment.title}
         Subject: ${assignment.subject}
         Priority Level: ${assignment.priority}/5
         
-        The email should explain the student was absent and request a specific number of extra days (e.g. 3-5). 
         Format the output as a ready-to-copy email with placeholders like [Teacher Name] and [Student Name]. 
         Keep it brief and encouraging. No giant blocks of text.`;
 
@@ -611,36 +639,73 @@ export default function App() {
                 </div>
                 <p className="text-[10px] text-slate-400 mt-2 leading-relaxed opacity-60">Automatically drafted via AI. Click the letter icon on tasks to trigger negotiation protocol.</p>
              </div>
-             <div className="bg-white/5 p-5 rounded-3xl border border-white/5 hover:border-bento-blue/30 transition-colors cursor-help group/card">
+             <button 
+                onClick={() => {
+                  const target = assignments.find(a => a.id === recommendedId) || 
+                                assignments.filter(a => a.status === 'todo').sort((a, b) => b.priority - a.priority)[0];
+                  if (target) generateEmail(target, 'office-hours');
+                }}
+                className="bg-white/5 p-5 rounded-3xl border border-white/5 hover:border-bento-blue/30 transition-all cursor-pointer group/card active:scale-95 text-left"
+             >
                 <div className="text-xs font-black text-white flex items-center gap-2">
                    <AlertCircle size={14} className="text-bento-orange" />
                    Office Hours Sync
                 </div>
                 <p className="text-[10px] text-slate-400 mt-2 leading-relaxed opacity-60">Request a status check or help briefing to ensure assignment alignment and XP gains.</p>
-             </div>
+             </button>
           </div>
         </section>
 
-        {/* Quick Loot: Inventory (Spans 1x1) */}
-        <section className="col-span-1 row-span-1 bg-white border border-slate-50 rounded-[2.5rem] p-8 flex flex-col shadow-lg shadow-slate-100/50">
-          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-6 flex items-center justify-between">
-            <span>Quick Loot</span>
-            <Zap size={14} className="text-bento-blue" />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {['Canvas', 'Gmail', 'Slides', 'GPT', 'Notion'].map(tag => (
-              <span key={tag} className="px-3 py-1.5 bg-slate-50 border border-slate-100 rounded-xl text-[9px] font-black text-slate-500 uppercase tracking-widest hover:bg-white hover:shadow-sm transition-all cursor-pointer">
-                {tag}
-              </span>
-            ))}
-          </div>
-        </section>
+        {/* Stamina: Active Module */}
+        <section className={`col-span-1 row-span-1 border-2 rounded-[2.5rem] p-6 flex flex-col justify-between items-center text-center shadow-xl transition-all ${
+          mentalStamina > 60 ? 'bg-white border-emerald-100 shadow-emerald-200/20' :
+          mentalStamina > 30 ? 'bg-white border-amber-100 shadow-amber-200/20' :
+          'bg-white border-rose-100 shadow-rose-200/30'
+        }`}>
+            <div className="flex justify-between items-center w-full mb-2">
+              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Mental Stamina</div>
+              <Flame size={14} className={
+                mentalStamina > 60 ? 'text-emerald-500' :
+                mentalStamina > 30 ? 'text-amber-500' : 'text-rose-500 animate-pulse'
+              } />
+            </div>
+            
+            <div className={`text-6xl font-black tracking-tighter ${
+               mentalStamina > 60 ? 'text-emerald-600' :
+               mentalStamina > 30 ? 'text-amber-600' : 'text-rose-600'
+            }`}>
+              {Math.round(mentalStamina)}%
+            </div>
 
-        {/* Stamina: Placeholder (Spans 1x1) */}
-        <section className="col-span-1 row-span-1 bg-gradient-to-br from-bento-orange to-amber-500 rounded-[2.5rem] p-8 flex flex-col justify-center items-center text-center shadow-xl shadow-orange-200/50">
-            <div className="text-[10px] font-black uppercase tracking-widest text-white/60 mb-2 self-start">Mental Stamina</div>
-            <div className="text-6xl font-black text-white tracking-tighter">84%</div>
-            <div className="mt-4 px-3 py-1 bg-white/20 rounded-full text-[8px] font-black text-white uppercase tracking-widest">Stable Core</div>
+            <div className="w-full space-y-4 pt-2">
+              <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                <motion.div 
+                  initial={{ width: 0 }}
+                  animate={{ width: `${mentalStamina}%` }}
+                  className={`h-full transition-all duration-500 ${
+                    mentalStamina > 60 ? 'bg-emerald-500' :
+                    mentalStamina > 30 ? 'bg-amber-500' : 'bg-rose-500'
+                  }`}
+                />
+              </div>
+
+              <div className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest ${
+                mentalStamina > 60 ? 'bg-emerald-50 text-emerald-600' :
+                mentalStamina > 30 ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'
+              }`}>
+                {mentalStamina > 80 ? 'Optimal Focus' :
+                 mentalStamina > 60 ? 'Stable Core' :
+                 mentalStamina > 30 ? 'Fatigue Detected' : 'CRITICAL: TAKE BREAK'}
+              </div>
+
+              <button 
+                onClick={takeBreak}
+                disabled={mentalStamina >= 100}
+                className="w-full py-3 bg-slate-900 text-white rounded-2xl text-[9px] font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all disabled:opacity-30 disabled:hover:scale-100 flex items-center justify-center gap-2"
+              >
+                <Sparkles size={12} /> Take a Break
+              </button>
+            </div>
         </section>
       </main>
 
