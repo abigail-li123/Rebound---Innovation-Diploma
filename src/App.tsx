@@ -286,7 +286,7 @@ export default function App() {
     setTacticalAdvice("Running scenario simulations...");
     
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY || (process.env as any).GOOGLE_API_KEY;
       if (!apiKey || apiKey === "undefined") {
         throw new Error("Gemini API Key missing");
       }
@@ -331,9 +331,9 @@ export default function App() {
     setSelectedForEmail(assignment);
     
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY || (process.env as any).GOOGLE_API_KEY;
       if (!apiKey || apiKey === "undefined") {
-        throw new Error("Gemini API Key is missing. Please ensure your environment is configured.");
+        throw new Error("Gemini API Key is missing. Please check your AI Studio environment settings.");
       }
 
       const ai = new GoogleGenAI({ apiKey });

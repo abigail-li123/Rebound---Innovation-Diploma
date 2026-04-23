@@ -7,6 +7,10 @@ export const apiRouter = express.Router();
 
 apiRouter.use(express.json());
 
+apiRouter.get('/diagnostic/env-keys', (req, res) => {
+  res.json({ keys: Object.keys(process.env).filter(k => k.includes('API') || k.includes('KEY') || k.includes('GEMINI') || k.includes('GOOGLE')) });
+});
+
 apiRouter.get('/ping', (req, res) => {
   res.json({ 
     status: 'online', 

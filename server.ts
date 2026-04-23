@@ -8,6 +8,8 @@ import { apiRouter } from './api/logic.js';
 
 dotenv.config();
 
+console.log('[Diagnostic] Env Keys:', Object.keys(process.env).filter(k => k.includes('API') || k.includes('KEY') || k.includes('GEMINI') || k.includes('GOOGLE')));
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
