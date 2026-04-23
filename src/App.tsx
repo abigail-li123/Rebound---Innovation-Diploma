@@ -286,7 +286,12 @@ export default function App() {
     setTacticalAdvice("Running scenario simulations...");
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey === "undefined") {
+        throw new Error("Gemini API Key missing");
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       const prompt = `You are a Tactical Recovery Strategist. Analyze these student assignments and pick the SINGLE most important one to focus on RIGHT NOW.
       Logic: Prioritize based on proximity of due date vs workload size vs priority level. 
       Small tasks due very soon are good "quick wins". Large tasks due soon are "critical threats".
@@ -312,9 +317,9 @@ export default function App() {
         setRecommendedId(result.recommendedId);
         setTacticalAdvice(result.reason);
       }
-    } catch (error) {
-      console.error(error);
-      setTacticalAdvice("Tactical link severed. Try again later.");
+    } catch (error: any) {
+      console.error("[Tactical Analysis Error]", error);
+      setTacticalAdvice(`Tactical link severed: ${error.message || "Unknown error"}`);
     } finally {
       setAnalyzingTactics(false);
     }
@@ -326,7 +331,12 @@ export default function App() {
     setSelectedForEmail(assignment);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey === "undefined") {
+        throw new Error("Gemini API Key is missing. Please ensure your environment is configured.");
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       
       const typePrompt = type === 'extension' 
         ? `Write a polite, professional, and concise email template for a student to ask their teacher for an extension on the following assignment. 
@@ -350,9 +360,10 @@ export default function App() {
       });
       
       setGeneratedEmail(response.text || "Could not generate email. Please try again.");
-    } catch (error) {
-      console.error(error);
-      setGeneratedEmail("Error connecting to the Diplomacy Center. Check your keys or connection.");
+    } catch (error: any) {
+      console.error("[Diplomacy Center Error]", error);
+      const errorMsg = error.message || "Unknown error";
+      setGeneratedEmail(`Error connecting to the Diplomacy Center: ${errorMsg}\n\nCheck your keys or connection.`);
     } finally {
       setIsGenerating(false);
     }
