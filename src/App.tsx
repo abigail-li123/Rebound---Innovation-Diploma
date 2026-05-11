@@ -24,7 +24,6 @@ import {
   LogOut,
   Settings
 } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User, signOut } from 'firebase/auth';
 import { 
@@ -51,6 +50,43 @@ const auth = getAuth(firebaseApp);
 const googleProvider = new GoogleAuthProvider();
 
 // Types
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
 interface Assignment {
   id: string;
   title: string;
@@ -72,7 +108,6 @@ export default function App() {
   const [showEmailTool, setShowEmailTool] = useState(false);
   const [selectedForEmail, setSelectedForEmail] = useState<Assignment | null>(null);
   const [generatedEmail, setGeneratedEmail] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
   
   // Canvas State
   const [canvasUrl, setCanvasUrl] = useState('https://canvas.instructure.com');
@@ -81,11 +116,6 @@ export default function App() {
   const [showCanvasSetup, setShowCanvasSetup] = useState(false);
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
   const [mentalStamina, setMentalStamina] = useState(100);
-
-  // Tactical Strategist state
-  const [analyzingTactics, setAnalyzingTactics] = useState(false);
-  const [recommendedId, setRecommendedId] = useState<string | null>(null);
-  const [tacticalAdvice, setTacticalAdvice] = useState<string | null>(null);
 
   // Handle Auth
   useEffect(() => {
@@ -103,7 +133,8 @@ export default function App() {
     }
 
     // Subscribe to Quests
-    const questsQuery = query(collection(db, `users/${user.uid}/quests`));
+    const questsPath = `users/${user.uid}/quests`;
+    const questsQuery = query(collection(db, questsPath));
     const unsubscribeQuests = onSnapshot(questsQuery, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Assignment));
       setAssignments(docs);
@@ -113,16 +144,21 @@ export default function App() {
         .filter(a => a.status === 'completed')
         .reduce((sum, a) => sum + (a.points || 0), 0);
       setPoints(totalPoints);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, questsPath);
     });
 
     // Subscribe to Config
-    const configDoc = doc(db, `users/${user.uid}/config/main`);
+    const configPath = `users/${user.uid}/config/main`;
+    const configDoc = doc(db, configPath);
     const unsubscribeConfig = onSnapshot(configDoc, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
         if (data.canvasUrl) setCanvasUrl(data.canvasUrl);
         if (data.mentalStamina !== undefined) setMentalStamina(data.mentalStamina);
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, configPath);
     });
 
     return () => {
@@ -158,8 +194,6 @@ export default function App() {
       
       const { assignments: canvasQuests } = data;
       await processCanvasQuests(canvasQuests);
-      // Auto-trigger AI Analysis after successful manual sync
-      setTimeout(() => runTacticalAnalysis(), 500);
     } catch (error: any) {
       console.error('Manual sync error detailed:', error);
       setLastSyncError(error.message);
@@ -195,7 +229,7 @@ export default function App() {
       }, { merge: true });
     });
 
-    await batch.commit();
+    await batch.commit().catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${user.uid}/quests`));
     setShowCanvasSetup(false);
     setManualToken('');
   };
@@ -217,8 +251,9 @@ export default function App() {
   const addAssignment = async (title: string, subject: string, priority: number, workload: number, dueDate: string) => {
     if (!user) return;
     const pointsValue = (priority + workload) * 50;
+    const questsPath = `users/${user.uid}/quests`;
     try {
-      await addDoc(collection(db, `users/${user.uid}/quests`), {
+      await addDoc(collection(db, questsPath), {
         title,
         subject,
         priority,
@@ -226,7 +261,7 @@ export default function App() {
         points: pointsValue,
         status: 'todo',
         dueDate: dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      });
+      }).catch(e => handleFirestoreError(e, OperationType.CREATE, questsPath));
       setIsAdding(false);
     } catch (e) {
       console.error('Error adding assignment:', e);
@@ -245,15 +280,31 @@ export default function App() {
       const questRef = doc(db, `users/${user.uid}/quests/${id}`);
       const configRef = doc(db, `users/${user.uid}/config/main`);
 
-      await updateDoc(questRef, { status: 'completed' });
-      await setDoc(configRef, { mentalStamina: newStamina }, { merge: true });
-
-      if (recommendedId === id) {
-        setRecommendedId(null);
-        setTacticalAdvice(null);
-      }
+      await updateDoc(questRef, { status: 'completed' }).catch(e => handleFirestoreError(e, OperationType.UPDATE, questRef.path));
+      await setDoc(configRef, { mentalStamina: newStamina }, { merge: true }).catch(e => handleFirestoreError(e, OperationType.WRITE, configRef.path));
     } catch (e) {
       console.error('Error completing assignment:', e);
+    }
+  };
+
+  const undoAssignment = async (id: string) => {
+    if (!user) return;
+    try {
+      const assignment = assignments.find(a => a.id === id);
+      if (!assignment) return;
+      
+      const workload = assignment.workload || 3;
+      const staminaRestore = workload * 5;
+      const newStamina = Math.min(100, mentalStamina + staminaRestore);
+      setMentalStamina(newStamina);
+
+      const questRef = doc(db, `users/${user.uid}/quests/${id}`);
+      const configRef = doc(db, `users/${user.uid}/config/main`);
+
+      await updateDoc(questRef, { status: 'todo' }).catch(e => handleFirestoreError(e, OperationType.UPDATE, questRef.path));
+      await setDoc(configRef, { mentalStamina: newStamina }, { merge: true }).catch(e => handleFirestoreError(e, OperationType.WRITE, configRef.path));
+    } catch (e) {
+      console.error('Error undoing assignment:', e);
     }
   };
 
@@ -262,111 +313,75 @@ export default function App() {
     const newStamina = Math.min(100, mentalStamina + 25); // Recovers 25%
     setMentalStamina(newStamina);
     const configRef = doc(db, `users/${user.uid}/config/main`);
-    await setDoc(configRef, { mentalStamina: newStamina }, { merge: true });
+    try {
+      await setDoc(configRef, { mentalStamina: newStamina }, { merge: true }).catch(e => handleFirestoreError(e, OperationType.WRITE, configRef.path));
+    } catch (e) {
+      console.error('Error taking break:', e);
+    }
   };
 
   const deleteAssignment = async (id: string) => {
     if (!user) return;
+    const questPath = `users/${user.uid}/quests/${id}`;
     try {
-      await deleteDoc(doc(db, `users/${user.uid}/quests/${id}`));
-      if (recommendedId === id) {
-        setRecommendedId(null);
-        setTacticalAdvice(null);
-      }
+      await deleteDoc(doc(db, questPath)).catch(e => handleFirestoreError(e, OperationType.DELETE, questPath));
     } catch (e) {
       console.error('Error deleting assignment:', e);
     }
   };
 
-  const runTacticalAnalysis = async () => {
-    const activeQuests = assignments.filter(a => a.status === 'todo');
-    if (activeQuests.length === 0) return;
-
-    setAnalyzingTactics(true);
-    setTacticalAdvice("Running scenario simulations...");
-    
-    try {
-      const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY || (process.env as any).GOOGLE_API_KEY;
-      if (!apiKey || apiKey === "undefined") {
-        throw new Error("Gemini API Key missing");
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = `You are a Tactical Recovery Strategist. Analyze these student assignments and pick the SINGLE most important one to focus on RIGHT NOW.
-      Logic: Prioritize based on proximity of due date vs workload size vs priority level. 
-      Small tasks due very soon are good "quick wins". Large tasks due soon are "critical threats".
-      
-      Active Assignments:
-      ${activeQuests.map((a: any) => `- ID: ${a.id}, Title: ${a.title}, Due: ${a.dueDate}, Workload (1-5): ${a.workload}, Priority (1-5): ${a.priority}`).join('\n')}
-      
-      Respond in strictly this JSON format:
-      {
-        "recommendedId": "the-id",
-        "reason": "15-word max explanation of why this is the priority"
-      }`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: { responseMimeType: "application/json" }
-      });
-      
-      const result = JSON.parse(response.text || "{}");
-      
-      if (result.recommendedId) {
-        setRecommendedId(result.recommendedId);
-        setTacticalAdvice(result.reason);
-      }
-    } catch (error: any) {
-      console.error("[Tactical Analysis Error]", error);
-      setTacticalAdvice(`Tactical link severed: ${error.message || "Unknown error"}`);
-    } finally {
-      setAnalyzingTactics(false);
-    }
-  };
-
-  const generateEmail = async (assignment: Assignment, type: 'extension' | 'office-hours' = 'extension') => {
-    setIsGenerating(true);
+  const generateEmail = (assignment: Assignment, type: 'extension' | 'office-hours' | 'other' = 'extension') => {
     setShowEmailTool(true);
     setSelectedForEmail(assignment);
     
-    try {
-      const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY || (process.env as any).GOOGLE_API_KEY;
-      if (!apiKey || apiKey === "undefined") {
-        throw new Error("Gemini API Key is missing. Please check your AI Studio environment settings.");
-      }
+    const templates = {
+      extension: `Subject: Extension Request: (Assignment Name)| [Your Name]
 
-      const ai = new GoogleGenAI({ apiKey });
-      
-      const typePrompt = type === 'extension' 
-        ? `Write a polite, professional, and concise email template for a student to ask their teacher for an extension on the following assignment. 
-           The email should explain the student was absent and request a specific number of extra days (e.g. 3-5).`
-        : `Write a polite, professional email template for a student to ask their teacher when they have office hours available this week. 
-           The student wants to drop by to discuss an assignment. 
-           IMPORTANT: Do NOT use the phrases "status check" or "help briefing". 
-           The email MUST include clear [BRACKETED PLACEHOLDERS] for the [Assignment Name] and a [Brief Description of what you want to discuss].`;
+Dear [Teacher Name],
 
-      const prompt = `You are a helpful academic advisor. ${typePrompt}
-        Assignment: ${assignment.title}
-        Subject: ${assignment.subject}
-        Priority Level: ${assignment.priority}/5
-        
-        Format the output as a ready-to-copy email with placeholders like [Teacher Name] and [Student Name]. 
-        Keep it brief and encouraging. No giant blocks of text.`;
+I hope you’re having a good week.
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-      });
-      
-      setGeneratedEmail(response.text || "Could not generate email. Please try again.");
-    } catch (error: any) {
-      console.error("[Diplomacy Center Error]", error);
-      const errorMsg = error.message || "Unknown error";
-      setGeneratedEmail(`Error connecting to the Diplomacy Center: ${errorMsg}\n\nCheck your keys or connection.`);
-    } finally {
-      setIsGenerating(false);
-    }
+I am writing to check in regarding the [Insert assignment name]. Due to my recent absence, I am currently catching up on the missed lessons and want to ensure I understand the material fully.
+
+Would it be possible to grant me an extension of [Insert Number, e.g., 3-5] days to complete this assessment?
+
+Thank you for your time and for helping me stay on track.
+
+Best regards,
+
+[Your Name]
+[Your Student ID, optional]`,
+      'office-hours': `Subject: Office Hour Referral Inquiry 
+
+Dear [Teacher Name],
+
+I hope you’re having a good week.
+
+I am writing to check in with you about the classes I missed. Due to my recent absence, I am (insert reason as to why you want the office hours) [Example: currently catching up on the missed lessons and want to ensure I understand the material fully or insert your own reason].
+
+Would it be possible to be referred for Flex or X sometime this week maybe (insert desired dates of availability)? Let me know if any of these dates would work for you.
+
+Thank you for your time and for helping me stay on track.
+
+Best regards,
+
+[Your Name]
+[Your Student ID, optional]`,
+      other: `Subject: Question regarding (Assignment Name)
+
+Dear [Teacher Name],
+
+I hope you're having a good week. I have a quick question about [Insert Assignment Name] specifically regarding [briefly describe your question here].
+
+I would appreciate any guidance or clarification you can provide.
+
+Best,
+
+[Your Name]
+[Your Student ID, optional]`
+    };
+
+    setGeneratedEmail(templates[type]);
   };
 
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -519,18 +534,6 @@ export default function App() {
                  <Sword size={14} className="text-bento-pink" />
                  Active Quests
                </h2>
-               {assignments.filter(a => a.status === 'todo').length > 0 && (
-                 <button 
-                   onClick={runTacticalAnalysis}
-                   className={`flex items-center gap-2 px-3 py-1 bg-bento-blue/10 border border-bento-blue/30 rounded-full text-[10px] font-black uppercase tracking-[0.15em] text-bento-blue hover:bg-bento-blue/20 transition-all shadow-sm ${
-                      assignments.filter(a => a.priority === 5 && a.status === 'todo').length > 0 && !recommendedId 
-                      ? 'animate-pulse ring-2 ring-bento-blue/50' 
-                      : ''
-                    } ${analyzingTactics ? 'animate-pulse opacity-50' : ''}`}
-                 >
-                   Tactical Scan
-                 </button>
-               )}
             </div>
             <button 
               onClick={() => setIsAdding(true)}
@@ -539,19 +542,6 @@ export default function App() {
               Add Command
             </button>
           </div>
-
-          {tacticalAdvice && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0, scale: 0.95 }}
-              animate={{ height: 'auto', opacity: 1, scale: 1 }}
-              className="mb-6 p-4 bg-bento-blue/5 border border-bento-blue/10 rounded-2xl flex items-center gap-3"
-            >
-              <div className="p-2 bg-bento-blue/10 rounded-xl">
-                 <Sparkles size={16} className="text-bento-blue shrink-0" />
-              </div>
-              <p className="text-[11px] font-bold text-slate-600 italic uppercase leading-tight tracking-tight">{tacticalAdvice}</p>
-            </motion.div>
-          )}
 
           <div className="flex-grow space-y-4 overflow-y-auto pr-2 custom-scrollbar max-h-[600px]">
             <AnimatePresence mode="popLayout">
@@ -567,7 +557,7 @@ export default function App() {
                 </div>
               ) : (
                 assignments.filter(a => a.status === 'todo')
-                  .sort((a, b) => b.priority - a.priority || new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+                  .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
                   .map((assignment) => (
                     <QuestCard 
                       key={assignment.id} 
@@ -575,7 +565,6 @@ export default function App() {
                       onComplete={completeAssignment}
                       onEmail={generateEmail}
                       onDelete={deleteAssignment}
-                      isRecommended={recommendedId === assignment.id}
                     />
                   ))
               )}
@@ -599,12 +588,20 @@ export default function App() {
               </div>
             ) : (
               assignments.filter(a => a.status === 'completed').map((assignment) => (
-                <div key={assignment.id} className="p-4 bg-white/60 border border-slate-100 rounded-2xl flex justify-between items-center group shadow-sm hover:shadow-md transition-shadow">
-                  <div className="min-w-0">
-                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{assignment.subject}</span>
-                    <h4 className="text-xs font-black text-slate-800 truncate">{assignment.title}</h4>
+                <div key={assignment.id} className="p-4 bg-white/60 border border-slate-100 rounded-2xl flex flex-col group shadow-sm hover:shadow-md transition-shadow relative">
+                  <div className="flex justify-between items-start mb-1">
+                    <div className="min-w-0">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{assignment.subject}</span>
+                      <h4 className="text-xs font-black text-slate-800 truncate">{assignment.title}</h4>
+                    </div>
+                    <span className="text-[10px] font-black text-bento-green whitespace-nowrap bg-bento-green/5 px-2 py-1 rounded-lg">+{assignment.points}</span>
                   </div>
-                  <span className="text-[10px] font-black text-bento-green whitespace-nowrap bg-bento-green/5 px-2 py-1 rounded-lg">+{assignment.points}</span>
+                  <button 
+                    onClick={() => undoAssignment(assignment.id)}
+                    className="self-end text-[9px] font-black text-slate-400 hover:text-bento-pink uppercase tracking-widest transition-colors"
+                  >
+                    undo?
+                  </button>
                 </div>
               ))
             )}
@@ -650,10 +647,9 @@ export default function App() {
                 </div>
                 <p className="text-[10px] text-slate-400 mt-2 leading-relaxed opacity-60">Automatically drafted via AI. Click the letter icon on tasks to trigger negotiation protocol.</p>
              </div>
-             <button 
+              <button 
                 onClick={() => {
-                  const target = assignments.find(a => a.id === recommendedId) || 
-                                assignments.filter(a => a.status === 'todo').sort((a, b) => b.priority - a.priority)[0];
+                  const target = assignments.filter(a => a.status === 'todo').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
                   if (target) generateEmail(target, 'office-hours');
                 }}
                 className="bg-white/5 p-5 rounded-3xl border border-white/5 hover:border-bento-blue/30 transition-all cursor-pointer group/card active:scale-95 text-left"
@@ -748,27 +744,32 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="relative min-h-[350px] bg-slate-50 border border-slate-100 rounded-[2rem] p-8 font-mono text-sm overflow-y-auto shadow-inner">
-                  {isGenerating ? (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-6">
-                      <div className="w-12 h-12 border-[6px] border-bento-blue/20 border-t-bento-blue rounded-full animate-spin" />
-                      <p className="text-[10px] uppercase font-black tracking-[0.3em] text-bento-blue animate-pulse">Computing Diplomacy Response...</p>
-                    </div>
-                  ) : (
-                    <pre className="whitespace-pre-wrap text-slate-600 leading-relaxed font-mono">
-                      {generatedEmail}
-                    </pre>
-                  )}
+                <div className="flex gap-2">
+                  {(['extension', 'office-hours', 'other'] as const).map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => generateEmail(selectedForEmail!, type)}
+                      className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-600 transition-all border border-slate-200"
+                    >
+                      {type.replace('-', ' ')}
+                    </button>
+                  ))}
                 </div>
 
-                <div className="flex items-center justify-end gap-3 pt-4">
+                <div className="relative min-h-[350px] bg-slate-50 border border-slate-100 rounded-[2rem] p-8 font-mono text-sm overflow-y-auto shadow-inner">
+                  <pre className="whitespace-pre-wrap text-slate-600 leading-relaxed font-mono">
+                    {generatedEmail}
+                  </pre>
+                </div>
+
+                <div className="flex items-center justify-end pt-4">
                   <button 
                      onClick={() => {
                         navigator.clipboard.writeText(generatedEmail);
                      }}
                      className="px-10 py-5 bg-slate-900 text-white rounded-[1.5rem] font-black text-xs uppercase tracking-[0.2em] hover:scale-105 transition-transform shadow-xl shadow-slate-900/20 active:scale-95"
                   >
-                    Copy Transmission
+                    Copy
                   </button>
                 </div>
               </div>

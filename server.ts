@@ -4,11 +4,9 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
-import { apiRouter } from './api/logic.js';
+import { apiRouter } from './api/logic.ts';
 
 dotenv.config();
-
-console.log('[Diagnostic] Env Keys:', Object.keys(process.env).filter(k => k.includes('API') || k.includes('KEY') || k.includes('GEMINI') || k.includes('GOOGLE')));
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

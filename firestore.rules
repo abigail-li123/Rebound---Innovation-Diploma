@@ -14,6 +14,7 @@ service cloud.firestore {
 
     // User Data
     match /users/{userId} {
+      allow get: if isOwner(userId);
       
       match /config/main {
         allow get: if isOwner(userId);
@@ -22,32 +23,36 @@ service cloud.firestore {
       
       match /quests/{questId} {
         allow list: if isOwner(userId);
-        allow get: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidQuest(request.resource.data);
-        allow update: if isOwner(userId) && isValidQuest(request.resource.data) && (
-          // Allow status toggling
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'points']) ||
+        allow get: if isOwner(userId) && isValidId(questId);
+        allow create: if isOwner(userId) && isValidId(questId) && isValidQuest(request.resource.data);
+        allow update: if isOwner(userId) && isValidId(questId) && isValidQuest(request.resource.data) && (
+          // Allow status toggling (this covers undo too)
+          request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'points']) ||
           // Allow full editing
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'subject', 'priority', 'workload', 'dueDate', 'points', 'status'])
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'subject', 'priority', 'workload', 'dueDate', 'points', 'status', 'source', 'externalId'])
         );
-        allow delete: if isOwner(userId);
+        allow delete: if isOwner(userId) && isValidId(questId);
       }
     }
 
     function isValidConfig(data) {
-      return data.keys().hasAll(['canvasUrl']) && 
-             data.canvasUrl is string && 
-             data.canvasUrl.size() < 512;
+      return (data.keys().hasAny(['canvasUrl', 'mentalStamina'])) &&
+             (!data.keys().contains('canvasUrl') || (data.canvasUrl is string && data.canvasUrl.size() < 512)) &&
+             (!data.keys().contains('mentalStamina') || (data.mentalStamina is int && data.mentalStamina >= 0 && data.mentalStamina <= 100));
     }
 
     function isValidQuest(data) {
-      return data.keys().hasAll(['title', 'subject', 'priority', 'status']) &&
+      let requiredFields = ['title', 'subject', 'priority', 'status'];
+      return data.keys().hasAll(requiredFields) &&
              data.title is string && data.title.size() <= 200 &&
              data.subject is string && data.subject.size() <= 100 &&
              data.priority is int && data.priority >= 1 && data.priority <= 5 &&
              data.status in ['todo', 'completed'] &&
              (!data.keys().contains('workload') || (data.workload is int && data.workload >= 1 && data.workload <= 5)) &&
-             (!data.keys().contains('points') || (data.points is int));
+             (!data.keys().contains('points') || (data.points is int)) &&
+             (!data.keys().contains('dueDate') || (data.dueDate is string)) &&
+             (!data.keys().contains('source') || (data.source is string)) &&
+             (!data.keys().contains('externalId') || (data.externalId is string));
     }
   }
 }
