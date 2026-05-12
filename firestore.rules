@@ -36,9 +36,12 @@ service cloud.firestore {
     }
 
     function isValidConfig(data) {
-      return (data.keys().hasAny(['canvasUrl', 'mentalStamina'])) &&
+      return (data.keys().hasAny(['canvasUrl', 'mentalStamina', 'todoSlots', 'syncEnabled', 'lastSync'])) &&
              (!data.keys().contains('canvasUrl') || (data.canvasUrl is string && data.canvasUrl.size() < 512)) &&
-             (!data.keys().contains('mentalStamina') || (data.mentalStamina is int && data.mentalStamina >= 0 && data.mentalStamina <= 100));
+             (!data.keys().contains('mentalStamina') || (data.mentalStamina is number && data.mentalStamina >= 0 && data.mentalStamina <= 100)) &&
+             (!data.keys().contains('todoSlots') || (data.todoSlots is list && data.todoSlots.size() == 3)) &&
+             (!data.keys().contains('syncEnabled') || (data.syncEnabled is bool)) &&
+             (!data.keys().contains('lastSync') || (data.lastSync is string));
     }
 
     function isValidQuest(data) {

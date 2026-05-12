@@ -8,7 +8,11 @@
         "canvasUrl": { "type": "string" },
         "syncEnabled": { "type": "boolean" },
         "lastSync": { "type": "string", "format": "date-time" },
-        "mentalStamina": { "type": "integer" }
+        "mentalStamina": { "type": "integer" },
+        "todoSlots": {
+          "type": "array",
+          "items": { "type": ["string", "null"] }
+        }
       }
     },
     "quest": {

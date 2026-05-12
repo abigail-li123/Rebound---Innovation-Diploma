@@ -9,6 +9,7 @@ import {
   Trophy, 
   Flame, 
   Mail, 
+  Activity,
   Plus, 
   CheckCircle2, 
   AlertCircle, 
@@ -108,6 +109,7 @@ export default function App() {
   const [showEmailTool, setShowEmailTool] = useState(false);
   const [selectedForEmail, setSelectedForEmail] = useState<Assignment | null>(null);
   const [generatedEmail, setGeneratedEmail] = useState('');
+  const [todoSlots, setTodoSlots] = useState<(string | null)[]>([null, null, null]);
   
   // Canvas State
   const [canvasUrl, setCanvasUrl] = useState('https://canvas.instructure.com');
@@ -156,6 +158,7 @@ export default function App() {
         const data = snapshot.data();
         if (data.canvasUrl) setCanvasUrl(data.canvasUrl);
         if (data.mentalStamina !== undefined) setMentalStamina(data.mentalStamina);
+        if (data.todoSlots) setTodoSlots(data.todoSlots);
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, configPath);
@@ -317,6 +320,17 @@ export default function App() {
       await setDoc(configRef, { mentalStamina: newStamina }, { merge: true }).catch(e => handleFirestoreError(e, OperationType.WRITE, configRef.path));
     } catch (e) {
       console.error('Error taking break:', e);
+    }
+  };
+
+  const updateTodoSlots = async (newSlots: (string | null)[]) => {
+    setTodoSlots(newSlots);
+    if (!user) return;
+    const configRef = doc(db, `users/${user.uid}/config/main`);
+    try {
+      await setDoc(configRef, { todoSlots: newSlots }, { merge: true }).catch(e => handleFirestoreError(e, OperationType.WRITE, configRef.path));
+    } catch (e) {
+      console.error('Error updating todo slots:', e);
     }
   };
 
@@ -525,9 +539,9 @@ Best,
         </div>
       </header>
 
-      <main className="relative z-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 grid-rows-auto gap-6 p-8 max-w-[1400px] mx-auto">
-        {/* Main Quest: Active Assignments (Spans 2x2) */}
-        <section className="col-span-1 md:col-span-2 row-span-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-[2.5rem] p-8 flex flex-col relative shadow-xl shadow-slate-200/50 group">
+      <main className="relative z-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 p-8 max-w-[1800px] mx-auto">
+        {/* Main Quest: Active Assignments (Spans 3x2) */}
+        <section className="col-span-1 md:col-span-2 lg:col-span-3 row-span-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-[2.5rem] p-8 flex flex-col relative shadow-xl shadow-slate-200/50 group">
           <div className="flex justify-between items-center mb-6">
             <div className="flex items-center gap-4">
                <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
@@ -557,7 +571,16 @@ Best,
                 </div>
               ) : (
                 assignments.filter(a => a.status === 'todo')
-                  .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+                  .sort((a, b) => {
+                    const dateA = new Date(a.dueDate).getTime();
+                    const dateB = new Date(b.dueDate).getTime();
+                    const isInvalidA = isNaN(dateA) || a.dueDate === '';
+                    const isInvalidB = isNaN(dateB) || b.dueDate === '';
+                    if (isInvalidA && isInvalidB) return 0;
+                    if (isInvalidA) return 1;
+                    if (isInvalidB) return -1;
+                    return dateA - dateB;
+                  })
                   .map((assignment) => (
                     <QuestCard 
                       key={assignment.id} 
@@ -572,35 +595,152 @@ Best,
           </div>
         </section>
 
-        {/* Side Quests: Quick Wins (Spans 1x2) */}
-        <section className="col-span-1 row-span-2 bg-white/40 backdrop-blur-md border border-white/60 rounded-[2.5rem] p-8 flex flex-col shadow-lg shadow-slate-100/30">
+        {/* Focus Slots: The To-Do List (Spans 1x2) */}
+        <section className="col-span-1 row-span-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-[2.5rem] p-8 flex flex-col shadow-xl shadow-slate-200/50">
           <div className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 mb-8 flex items-center gap-2">
-            <Trophy size={14} className="text-bento-green" />
+            <ClipboardCheck size={14} className="text-indigo-500" />
+            To Do List
+          </div>
+          <div className="flex-grow space-y-6">
+            {todoSlots.map((assignmentId, index) => {
+              const assignment = assignments.find(a => a.id === assignmentId);
+              return (
+                <div 
+                  key={index}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const id = e.dataTransfer.getData('assignmentId');
+                    const newSlots = [...todoSlots];
+                    newSlots[index] = id;
+                    updateTodoSlots(newSlots);
+                  }}
+                  className={`relative h-[160px] rounded-[2rem] border-2 border-dashed flex flex-col items-center justify-center p-4 transition-all ${
+                    assignment 
+                      ? 'border-indigo-100 bg-indigo-50/30' 
+                      : 'border-slate-100 bg-slate-50/30 hover:border-indigo-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {assignment ? (
+                    <div className="w-full h-full relative flex flex-col justify-between">
+                      <button 
+                        onClick={() => {
+                          const newSlots = [...todoSlots];
+                          newSlots[index] = null;
+                          updateTodoSlots(newSlots);
+                        }}
+                        className="absolute -top-2 -right-2 p-1.5 bg-white border border-slate-100 rounded-full text-slate-400 hover:text-rose-500 shadow-sm"
+                      >
+                        <X size={12} />
+                      </button>
+                      <div className="space-y-1">
+                        <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">{assignment.subject}</span>
+                        <h4 className="text-xs font-black text-slate-800 line-clamp-2 leading-tight">{assignment.title}</h4>
+                      </div>
+                      <div className="flex items-center gap-2">
+                         <div className="h-1 flex-grow bg-slate-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-indigo-400" style={{ width: '100%' }} />
+                         </div>
+                         <span className="text-[10px] font-black text-indigo-500">READY</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center space-y-2 opacity-30">
+                      <div className="mx-auto w-8 h-8 rounded-full border-2 border-slate-300 flex items-center justify-center">
+                        <Plus size={16} />
+                      </div>
+                      <p className="text-[8px] font-black uppercase tracking-widest">Drop Slot {index + 1}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-6 text-[8px] font-bold text-slate-400 uppercase tracking-widest text-center">Drag quests here to prioritize</p>
+        </section>
+
+
+        {/* Bio-Metrics Hub: Unified Stamina & Recovery (Spans 1x1) */}
+        <section className={`col-span-1 row-span-1 rounded-[2.5rem] p-6 flex flex-col border-2 transition-all shadow-xl ${
+          mentalStamina > 60 ? 'bg-white border-emerald-100 shadow-emerald-200/20' :
+          mentalStamina > 30 ? 'bg-white border-amber-100 shadow-amber-200/20' :
+          'bg-white border-rose-100 shadow-rose-200/30'
+        }`}>
+          <div className="flex justify-between items-center mb-4">
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Stats</div>
+            <Activity size={14} className={
+                mentalStamina > 60 ? 'text-emerald-500' :
+                mentalStamina > 30 ? 'text-amber-500' : 'text-rose-500 animate-pulse'
+              } />
+          </div>
+
+          <div className="flex items-end justify-between mb-4">
+             <div className={`text-4xl font-black tracking-tighter ${
+                mentalStamina > 60 ? 'text-emerald-600' :
+                mentalStamina > 30 ? 'text-amber-600' : 'text-rose-600'
+             }`}>
+               {Math.round(mentalStamina)}%
+             </div>
+             <div className="text-right">
+                <div className="text-[8px] font-black uppercase text-slate-400">Level</div>
+                <div className="text-[10px] font-black text-slate-900">Stage {level}</div>
+             </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden p-0.5">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${mentalStamina}%` }}
+                className={`h-full rounded-full transition-all duration-500 ${
+                  mentalStamina > 60 ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' :
+                  mentalStamina > 30 ? 'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.3)]' : 
+                  'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.3)]'
+                }`}
+              />
+            </div>
+            
+            <div className="flex justify-between gap-2">
+               <div className="flex-grow bg-slate-50 rounded-xl p-2 border border-slate-100/50">
+                  <div className="text-[7px] font-black text-slate-400 uppercase">Efficiency</div>
+                  <div className="text-[10px] font-black text-slate-700">{Math.round(progressToNextLevel)}%</div>
+               </div>
+               <button 
+                onClick={takeBreak}
+                disabled={mentalStamina >= 100}
+                className="bg-slate-900 text-white px-4 py-2 rounded-xl text-[8px] font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all disabled:opacity-30 flex items-center gap-1.5"
+              >
+                <Sparkles size={10} /> Break
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Hall of Victories (Spans 1x1) */}
+        <section className="col-span-1 row-span-1 bg-white/40 backdrop-blur-md border border-white/60 rounded-[2.5rem] p-6 flex flex-col shadow-lg shadow-slate-100/30 overflow-hidden">
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-4 flex items-center gap-2">
+            <Trophy size={12} className="text-bento-green" />
             Hall of Victories
           </div>
-          <div className="space-y-3 overflow-y-auto flex-grow max-h-[600px] pr-1">
+          <div className="space-y-2 overflow-y-auto flex-grow max-h-[300px] pr-1 custom-scrollbar">
             {assignments.filter(a => a.status === 'completed').length === 0 ? (
-              <div className="py-20 text-center flex flex-col items-center justify-center space-y-4">
-                 <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center">
-                    <CheckCircle2 size={24} className="text-slate-200" />
-                 </div>
-                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-300">Awaiting victories...</p>
+              <div className="py-4 text-center flex flex-col items-center justify-center space-y-2">
+                 <p className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-300 italic">Awaiting Victories</p>
               </div>
             ) : (
               assignments.filter(a => a.status === 'completed').map((assignment) => (
-                <div key={assignment.id} className="p-4 bg-white/60 border border-slate-100 rounded-2xl flex flex-col group shadow-sm hover:shadow-md transition-shadow relative">
-                  <div className="flex justify-between items-start mb-1">
+                <div key={assignment.id} className="p-3 bg-white/60 border border-slate-100 rounded-xl flex flex-col group shadow-sm relative">
+                  <div className="flex justify-between items-start">
                     <div className="min-w-0">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{assignment.subject}</span>
-                      <h4 className="text-xs font-black text-slate-800 truncate">{assignment.title}</h4>
+                      <h4 className="text-[10px] font-black text-slate-800 truncate">{assignment.title}</h4>
                     </div>
-                    <span className="text-[10px] font-black text-bento-green whitespace-nowrap bg-bento-green/5 px-2 py-1 rounded-lg">+{assignment.points}</span>
+                    <span className="text-[8px] font-black text-bento-green bg-bento-green/5 px-1.5 py-0.5 rounded-md">+{assignment.points}</span>
                   </div>
                   <button 
                     onClick={() => undoAssignment(assignment.id)}
-                    className="self-end text-[9px] font-black text-slate-400 hover:text-bento-pink uppercase tracking-widest transition-colors"
+                    className="self-end text-[8px] font-black text-slate-300 hover:text-bento-pink uppercase tracking-widest transition-colors mt-1"
                   >
-                    undo?
+                    undo
                   </button>
                 </div>
               ))
@@ -608,112 +748,7 @@ Best,
           </div>
         </section>
 
-        {/* Recovery Status: Mini-Map (Spans 1x1) */}
-        <section className="col-span-1 row-span-1 bg-white border border-slate-50 rounded-[2.5rem] p-8 flex flex-col justify-center shadow-lg shadow-slate-100/50">
-          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Recovery Status</div>
-          <div className="text-4xl font-black text-slate-900 tracking-tighter">Stage {level}</div>
-          <div className="text-[9px] text-bento-green mt-1 uppercase font-black tracking-widest">Optimized Protocol</div>
-          <div className="mt-8 space-y-2">
-            <div className="flex justify-between items-end text-[10px] font-black uppercase tracking-widest text-slate-400">
-               <span>Efficiency</span>
-               <span className="text-slate-900">{Math.round(progressToNextLevel)}%</span>
-            </div>
-            <div className="w-full h-3 bg-slate-50 rounded-full overflow-hidden p-1 border border-slate-100">
-               <div 
-                 className="h-full bg-gradient-to-r from-bento-green to-emerald-400 rounded-full transition-all duration-700 ease-out" 
-                 style={{ width: `${progressToNextLevel}%` }}
-               />
-            </div>
-          </div>
-        </section>
 
-        {/* The Negotiator: NPC Comms (Spans 2x1) */}
-        <section className="col-span-1 md:col-span-2 row-span-1 bg-slate-900 rounded-[2.5rem] p-8 flex flex-col shadow-2xl shadow-slate-900/40 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:rotate-12 transition-transform">
-             <Mail size={120} className="text-white" />
-          </div>
-          <div className="flex justify-between items-start mb-6 relative z-10">
-            <div className="space-y-1">
-              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Social Engineering</div>
-              <h3 className="text-lg font-black text-white italic uppercase tracking-tight">The Negotiator</h3>
-            </div>
-            <div className="px-3 py-1 bg-bento-blue rounded-full text-[8px] font-black text-white uppercase tracking-widest">Dialogue Active</div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 relative z-10">
-             <div className="bg-white/5 border border-dashed border-bento-blue/40 p-5 rounded-3xl group/card">
-                <div className="text-xs font-black text-white flex items-center gap-2">
-                   <Mail size={14} className="text-bento-blue" />
-                   Extension Request
-                </div>
-                <p className="text-[10px] text-slate-400 mt-2 leading-relaxed opacity-60">Automatically drafted via AI. Click the letter icon on tasks to trigger negotiation protocol.</p>
-             </div>
-              <button 
-                onClick={() => {
-                  const target = assignments.filter(a => a.status === 'todo').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
-                  if (target) generateEmail(target, 'office-hours');
-                }}
-                className="bg-white/5 p-5 rounded-3xl border border-white/5 hover:border-bento-blue/30 transition-all cursor-pointer group/card active:scale-95 text-left"
-             >
-                <div className="text-xs font-black text-white flex items-center gap-2">
-                   <AlertCircle size={14} className="text-bento-orange" />
-                   Office Hours Sync
-                </div>
-                <p className="text-[10px] text-slate-400 mt-2 leading-relaxed opacity-60">Request a status check or help briefing to ensure assignment alignment and XP gains.</p>
-             </button>
-          </div>
-        </section>
-
-        {/* Stamina: Active Module */}
-        <section className={`col-span-1 row-span-1 border-2 rounded-[2.5rem] p-6 flex flex-col justify-between items-center text-center shadow-xl transition-all ${
-          mentalStamina > 60 ? 'bg-white border-emerald-100 shadow-emerald-200/20' :
-          mentalStamina > 30 ? 'bg-white border-amber-100 shadow-amber-200/20' :
-          'bg-white border-rose-100 shadow-rose-200/30'
-        }`}>
-            <div className="flex justify-between items-center w-full mb-2">
-              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Mental Stamina</div>
-              <Flame size={14} className={
-                mentalStamina > 60 ? 'text-emerald-500' :
-                mentalStamina > 30 ? 'text-amber-500' : 'text-rose-500 animate-pulse'
-              } />
-            </div>
-            
-            <div className={`text-6xl font-black tracking-tighter ${
-               mentalStamina > 60 ? 'text-emerald-600' :
-               mentalStamina > 30 ? 'text-amber-600' : 'text-rose-600'
-            }`}>
-              {Math.round(mentalStamina)}%
-            </div>
-
-            <div className="w-full space-y-4 pt-2">
-              <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                <motion.div 
-                  initial={{ width: 0 }}
-                  animate={{ width: `${mentalStamina}%` }}
-                  className={`h-full transition-all duration-500 ${
-                    mentalStamina > 60 ? 'bg-emerald-500' :
-                    mentalStamina > 30 ? 'bg-amber-500' : 'bg-rose-500'
-                  }`}
-                />
-              </div>
-
-              <div className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest ${
-                mentalStamina > 60 ? 'bg-emerald-50 text-emerald-600' :
-                mentalStamina > 30 ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'
-              }`}>
-                {mentalStamina > 80 ? 'Optimal Focus' :
-                 mentalStamina > 60 ? 'Stable Core' :
-                 mentalStamina > 30 ? 'Fatigue Detected' : 'CRITICAL: TAKE BREAK'}
-              </div>
-
-              <button 
-                onClick={takeBreak}
-                disabled={mentalStamina >= 100}
-                className="w-full py-3 bg-slate-900 text-white rounded-2xl text-[9px] font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all disabled:opacity-30 disabled:hover:scale-100 flex items-center justify-center gap-2"
-              >
-                <Sparkles size={12} /> Take a Break
-              </button>
-            </div>
-        </section>
       </main>
 
       {/* Diplomacy Overlay */}
@@ -916,6 +951,11 @@ function QuestCard({
   return (
     <motion.div 
       layout
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('assignmentId', assignment.id);
+        e.dataTransfer.effectAllowed = 'copy';
+      }}
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
@@ -949,7 +989,10 @@ function QuestCard({
         </h3>
         <div className="flex flex-wrap items-center gap-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">
            <span className="flex items-center gap-1 text-bento-green bg-bento-green/5 px-2 py-1 rounded-md">+{assignment.points} EXP</span>
-           <span className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md"><AlertCircle size={12} className={new Date(assignment.dueDate) < new Date() ? 'text-rose-500' : 'text-slate-300'} /> Deadline: {assignment.dueDate}</span>
+           <span className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md">
+             <AlertCircle size={12} className={assignment.dueDate && !isNaN(new Date(assignment.dueDate).getTime()) && new Date(assignment.dueDate) < new Date() ? 'text-rose-500' : 'text-slate-300'} /> 
+             Deadline: {assignment.dueDate && !isNaN(new Date(assignment.dueDate).getTime()) ? assignment.dueDate : 'No Due Date'}
+           </span>
            <span className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md"><Zap size={12} className="text-slate-300" /> W-Load: {assignment.workload}</span>
         </div>
       </div>
