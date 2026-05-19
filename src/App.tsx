@@ -97,6 +97,7 @@ interface Assignment {
   points: number;
   status: 'todo' | 'completed';
   dueDate: string;
+  teacherName?: string;
   source?: 'manual' | 'canvas';
   externalId?: string;
 }
@@ -106,18 +107,18 @@ export default function App() {
   const [points, setPoints] = useState(0);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [isAdding, setIsAdding] = useState(false);
+
+  // Canvas & UI State
+  const [canvasUrl, setCanvasUrl] = useState('');
+  const [manualToken, setManualToken] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
+  const [showCanvasSetup, setShowCanvasSetup] = useState(false);
+  const [mentalStamina, setMentalStamina] = useState(100);
+  const [todoSlots, setTodoSlots] = useState<(string | null)[]>([null, null, null]);
   const [showEmailTool, setShowEmailTool] = useState(false);
   const [selectedForEmail, setSelectedForEmail] = useState<Assignment | null>(null);
   const [generatedEmail, setGeneratedEmail] = useState('');
-  const [todoSlots, setTodoSlots] = useState<(string | null)[]>([null, null, null]);
-  
-  // Canvas State
-  const [canvasUrl, setCanvasUrl] = useState('https://canvas.instructure.com');
-  const [manualToken, setManualToken] = useState('');
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [showCanvasSetup, setShowCanvasSetup] = useState(false);
-  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
-  const [mentalStamina, setMentalStamina] = useState(100);
 
   // Handle Auth
   useEffect(() => {
@@ -146,6 +147,10 @@ export default function App() {
         .filter(a => a.status === 'completed')
         .reduce((sum, a) => sum + (a.points || 0), 0);
       setPoints(totalPoints);
+
+      // Persist points to config if changed
+      const configRef = doc(db, `users/${user.uid}/config/main`);
+      setDoc(configRef, { points: totalPoints }, { merge: true }).catch(() => {}); // Silent catch, non-critical
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, questsPath);
     });
@@ -175,6 +180,10 @@ export default function App() {
     setIsSyncing(true);
     setLastSyncError(null);
     try {
+      // Save canvasUrl to firestore for persistence
+      const configRef = doc(db, `users/${user.uid}/config/main`);
+      await setDoc(configRef, { canvasUrl }, { merge: true }).catch(e => handleFirestoreError(e, OperationType.WRITE, configRef.path));
+
       const response = await fetch('/api/canvas/sync-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -220,7 +229,7 @@ export default function App() {
       const isOverdue = due && due < now && !isCompleted;
 
       batch.set(questRef, {
-        title: cq.name,
+        title: cq.name || 'Untitled Assignment',
         subject: cq.courseName || 'Imported',
         priority: isOverdue ? 5 : 3, // Overdue becomes "Critical Threat" (5)
         workload: 3, 
@@ -251,7 +260,7 @@ export default function App() {
   const progressToNextLevel = (points % 500) / 5; // 0-100
 
   // Points system: (Difficulty + Workload) * 50
-  const addAssignment = async (title: string, subject: string, priority: number, workload: number, dueDate: string) => {
+  const addAssignment = async (title: string, subject: string, priority: number, workload: number, dueDate: string, teacherName: string) => {
     if (!user) return;
     const pointsValue = (priority + workload) * 50;
     const questsPath = `users/${user.uid}/quests`;
@@ -264,6 +273,7 @@ export default function App() {
         points: pointsValue,
         status: 'todo',
         dueDate: dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        teacherName
       }).catch(e => handleFirestoreError(e, OperationType.CREATE, questsPath));
       setIsAdding(false);
     } catch (e) {
@@ -344,18 +354,44 @@ export default function App() {
     }
   };
 
+  const updateWorkload = async (id: string, newWorkload: number) => {
+    if (!user) return;
+    try {
+      const assignment = assignments.find(a => a.id === id);
+      if (!assignment) return;
+      
+      const safeWorkload = Number(newWorkload);
+      const safePriority = Number(assignment.priority);
+      const newPoints = Math.round((safePriority + safeWorkload) * 50);
+      
+      const questRef = doc(db, `users/${user.uid}/quests/${id}`);
+      console.log(`Updating workload for ${id} to ${safeWorkload}, points to ${newPoints}`);
+      
+      await updateDoc(questRef, { 
+        workload: safeWorkload,
+        points: newPoints 
+      }).catch(e => handleFirestoreError(e, OperationType.UPDATE, questRef.path));
+    } catch (e) {
+      console.error('Error updating workload:', e);
+    }
+  };
+
   const generateEmail = (assignment: Assignment, type: 'extension' | 'office-hours' | 'other' = 'extension') => {
     setShowEmailTool(true);
     setSelectedForEmail(assignment);
     
-    const templates = {
-      extension: `Subject: Extension Request: (Assignment Name)| [Your Name]
+    const teacher = assignment.teacherName || '[Teacher Name]';
+    const assignmentTitle = assignment.title;
+    const userName = user?.displayName || '[Your Name]';
 
-Dear [Teacher Name],
+    const templates = {
+      extension: `Subject: Extension Request: ${assignmentTitle} | ${userName}
+
+Dear ${teacher},
 
 I hope you’re having a good week.
 
-I am writing to check in regarding the [Insert assignment name]. Due to my recent absence, I am currently catching up on the missed lessons and want to ensure I understand the material fully.
+I am writing to check in regarding the ${assignmentTitle}. Due to my recent absence, I am currently catching up on the missed lessons and want to ensure I understand the material fully.
 
 Would it be possible to grant me an extension of [Insert Number, e.g., 3-5] days to complete this assessment?
 
@@ -363,35 +399,35 @@ Thank you for your time and for helping me stay on track.
 
 Best regards,
 
-[Your Name]
+${userName}
 [Your Student ID, optional]`,
-      'office-hours': `Subject: Office Hour Referral Inquiry 
+      'office-hours': `Subject: Office Hour Referral Inquiry - ${assignmentTitle}
 
-Dear [Teacher Name],
+Dear ${teacher},
 
 I hope you’re having a good week.
 
-I am writing to check in with you about the classes I missed. Due to my recent absence, I am (insert reason as to why you want the office hours) [Example: currently catching up on the missed lessons and want to ensure I understand the material fully or insert your own reason].
+I am writing to check in with you about the classes I missed. Due to my recent absence, I am currently catching up on the missed lessons for ${assignmentTitle} and want to ensure I understand the material fully.
 
-Would it be possible to be referred for Flex or X sometime this week maybe (insert desired dates of availability)? Let me know if any of these dates would work for you.
+Would it be possible to be referred for Flex or X sometime this week? Please let me know if you have any availability.
 
 Thank you for your time and for helping me stay on track.
 
 Best regards,
 
-[Your Name]
+${userName}
 [Your Student ID, optional]`,
-      other: `Subject: Question regarding (Assignment Name)
+      other: `Subject: Question regarding ${assignmentTitle}
 
-Dear [Teacher Name],
+Dear ${teacher},
 
-I hope you're having a good week. I have a quick question about [Insert Assignment Name] specifically regarding [briefly describe your question here].
+I hope you're having a good week. I have a quick question about ${assignmentTitle} specifically regarding [briefly describe your question here].
 
 I would appreciate any guidance or clarification you can provide.
 
 Best,
 
-[Your Name]
+${userName}
 [Your Student ID, optional]`
     };
 
@@ -541,123 +577,141 @@ Best,
 
       <main className="relative z-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 p-8 max-w-[1800px] mx-auto">
         {/* Main Quest: Active Assignments (Spans 3x2) */}
-        <section className="col-span-1 md:col-span-2 lg:col-span-3 row-span-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-[2.5rem] p-8 flex flex-col relative shadow-xl shadow-slate-200/50 group">
-          <div className="flex justify-between items-center mb-6">
-            <div className="flex items-center gap-4">
-               <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
-                 <Sword size={14} className="text-bento-pink" />
-                 Active Quests
-               </h2>
-            </div>
-            <button 
-              onClick={() => setIsAdding(true)}
-              className="bg-bento-pink text-white px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-bento-pink/20 hover:scale-105 transition-transform active:scale-95"
-            >
-              Add Command
-            </button>
-          </div>
-
-          <div className="flex-grow space-y-4 overflow-y-auto pr-2 custom-scrollbar max-h-[600px]">
-            <AnimatePresence mode="popLayout">
-              {isAdding && (
-                <AssignmentForm onAdd={addAssignment} onCancel={() => setIsAdding(false)} />
-              )}
-              {assignments.filter(a => a.status === 'todo').length === 0 && !isAdding ? (
-                <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-50 py-24">
-                   <div className="p-6 bg-slate-50 rounded-[2rem]">
-                      <Sword size={64} className="text-slate-300" />
-                   </div>
-                   <p className="text-sm font-black uppercase tracking-widest italic text-slate-400">All sectors clear.</p>
+            <section className="col-span-1 md:col-span-2 lg:col-span-3 row-span-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-[2.5rem] p-8 flex flex-col relative shadow-xl shadow-slate-200/50 group">
+              <div className="flex justify-between items-center mb-6">
+                <div className="flex items-center gap-4">
+                  <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
+                    <Sword size={14} className="text-bento-pink" />
+                    Active Quests
+                  </h2>
                 </div>
-              ) : (
-                assignments.filter(a => a.status === 'todo')
-                  .sort((a, b) => {
-                    const dateA = new Date(a.dueDate).getTime();
-                    const dateB = new Date(b.dueDate).getTime();
-                    const isInvalidA = isNaN(dateA) || a.dueDate === '';
-                    const isInvalidB = isNaN(dateB) || b.dueDate === '';
-                    if (isInvalidA && isInvalidB) return 0;
-                    if (isInvalidA) return 1;
-                    if (isInvalidB) return -1;
-                    return dateA - dateB;
-                  })
-                  .map((assignment) => (
-                    <QuestCard 
-                      key={assignment.id} 
-                      assignment={assignment} 
-                      onComplete={completeAssignment}
-                      onEmail={generateEmail}
-                      onDelete={deleteAssignment}
-                    />
-                  ))
-              )}
-            </AnimatePresence>
-          </div>
-        </section>
-
-        {/* Focus Slots: The To-Do List (Spans 1x2) */}
-        <section className="col-span-1 row-span-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-[2.5rem] p-8 flex flex-col shadow-xl shadow-slate-200/50">
-          <div className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 mb-8 flex items-center gap-2">
-            <ClipboardCheck size={14} className="text-indigo-500" />
-            To Do List
-          </div>
-          <div className="flex-grow space-y-6">
-            {todoSlots.map((assignmentId, index) => {
-              const assignment = assignments.find(a => a.id === assignmentId);
-              return (
-                <div 
-                  key={index}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const id = e.dataTransfer.getData('assignmentId');
-                    const newSlots = [...todoSlots];
-                    newSlots[index] = id;
-                    updateTodoSlots(newSlots);
-                  }}
-                  className={`relative h-[160px] rounded-[2rem] border-2 border-dashed flex flex-col items-center justify-center p-4 transition-all ${
-                    assignment 
-                      ? 'border-indigo-100 bg-indigo-50/30' 
-                      : 'border-slate-100 bg-slate-50/30 hover:border-indigo-200 hover:bg-slate-50'
-                  }`}
+                <button 
+                  onClick={() => setIsAdding(true)}
+                  className="bg-bento-pink text-white px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-bento-pink/20 hover:scale-105 transition-transform active:scale-95"
                 >
-                  {assignment ? (
-                    <div className="w-full h-full relative flex flex-col justify-between">
-                      <button 
-                        onClick={() => {
-                          const newSlots = [...todoSlots];
-                          newSlots[index] = null;
-                          updateTodoSlots(newSlots);
-                        }}
-                        className="absolute -top-2 -right-2 p-1.5 bg-white border border-slate-100 rounded-full text-slate-400 hover:text-rose-500 shadow-sm"
-                      >
-                        <X size={12} />
-                      </button>
-                      <div className="space-y-1">
-                        <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">{assignment.subject}</span>
-                        <h4 className="text-xs font-black text-slate-800 line-clamp-2 leading-tight">{assignment.title}</h4>
+                  Add Command
+                </button>
+              </div>
+
+              <div className="flex-grow space-y-4 overflow-y-auto pr-2 custom-scrollbar max-h-[600px]">
+                <AnimatePresence mode="popLayout">
+                  {isAdding && (
+                    <AssignmentForm onAdd={addAssignment} onCancel={() => setIsAdding(false)} />
+                  )}
+                  {assignments.filter(a => a.status === 'todo').length === 0 && !isAdding ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-50 py-24">
+                      <div className="p-6 bg-slate-50 rounded-[2rem]">
+                          <Sword size={64} className="text-slate-300" />
                       </div>
-                      <div className="flex items-center gap-2">
-                         <div className="h-1 flex-grow bg-slate-100 rounded-full overflow-hidden">
-                            <div className="h-full bg-indigo-400" style={{ width: '100%' }} />
-                         </div>
-                         <span className="text-[10px] font-black text-indigo-500">READY</span>
-                      </div>
+                      <p className="text-sm font-black uppercase tracking-widest italic text-slate-400">All sectors clear.</p>
                     </div>
                   ) : (
-                    <div className="text-center space-y-2 opacity-30">
-                      <div className="mx-auto w-8 h-8 rounded-full border-2 border-slate-300 flex items-center justify-center">
-                        <Plus size={16} />
-                      </div>
-                      <p className="text-[8px] font-black uppercase tracking-widest">Drop Slot {index + 1}</p>
-                    </div>
+                    assignments.filter(a => a.status === 'todo')
+                      .sort((a, b) => {
+                        const dateA = new Date(a.dueDate).getTime();
+                        const dateB = new Date(b.dueDate).getTime();
+                        if (isNaN(dateA)) return 1;
+                        if (isNaN(dateB)) return -1;
+                        return dateA - dateB;
+                      })
+                      .map((assignment) => (
+                        <QuestCard 
+                          key={assignment.id} 
+                          assignment={assignment} 
+                          onComplete={completeAssignment}
+                          onEmail={generateEmail}
+                          onDelete={deleteAssignment}
+                          onUpdateWorkload={updateWorkload}
+                        />
+                      ))
                   )}
-                </div>
-              );
-            })}
-          </div>
-          <p className="mt-6 text-[8px] font-bold text-slate-400 uppercase tracking-widest text-center">Drag quests here to prioritize</p>
-        </section>
+                </AnimatePresence>
+              </div>
+            </section>
+
+            <section className="col-span-1 row-span-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-[2.5rem] p-8 flex flex-col shadow-xl shadow-slate-200/50">
+              <div className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 mb-8 flex items-center gap-2">
+                <ClipboardCheck size={14} className="text-indigo-500" />
+                To Do List
+              </div>
+              <div className="flex-grow space-y-6">
+                {todoSlots.map((slotId, index) => {
+                  const isEmailTask = slotId?.startsWith('email:');
+                  const actualAssignmentId = isEmailTask ? slotId?.split(':')[1] : slotId;
+                  const assignment = assignments.find(a => a.id === actualAssignmentId);
+                  
+                  return (
+                    <div 
+                      key={index}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const id = e.dataTransfer.getData('assignmentId');
+                        const taskType = e.dataTransfer.getData('taskType') || 'assignment';
+                        const finalSlotValue = taskType === 'email' ? `email:${id}` : id;
+                        
+                        const newSlots = [...todoSlots];
+                        newSlots[index] = finalSlotValue;
+                        updateTodoSlots(newSlots);
+                      }}
+                      onClick={() => {
+                        if (isEmailTask && assignment) {
+                          generateEmail(assignment);
+                        }
+                      }}
+                      className={`relative h-[160px] rounded-[2rem] border-2 border-dashed flex flex-col items-center justify-center p-4 transition-all ${
+                        assignment 
+                          ? isEmailTask ? 'border-bento-blue/30 bg-bento-blue/5 cursor-pointer hover:border-bento-blue hover:scale-[1.02]' : 'border-indigo-100 bg-indigo-50/30' 
+                          : 'border-slate-100 bg-slate-50/30 hover:border-indigo-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {assignment ? (
+                        <div className="w-full h-full relative flex flex-col justify-between">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const newSlots = [...todoSlots];
+                              newSlots[index] = null;
+                              updateTodoSlots(newSlots);
+                            }}
+                            className="absolute -top-2 -right-2 p-1.5 bg-white border border-slate-100 rounded-full text-slate-400 hover:text-rose-500 shadow-sm z-10"
+                          >
+                            <X size={12} />
+                          </button>
+                          <div className="space-y-1">
+                            <span className={`text-[8px] font-black uppercase tracking-widest ${isEmailTask ? 'text-bento-blue' : 'text-slate-400'}`}>
+                              {isEmailTask ? 'COMMUNICATION' : assignment.subject}
+                            </span>
+                            <h4 className="text-xs font-black text-slate-800 line-clamp-3 leading-tight">
+                              {isEmailTask 
+                                ? `Email ${assignment.teacherName ? assignment.teacherName : 'teacher'} about ${assignment.title}`
+                                : assignment.title
+                              }
+                            </h4>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className={`h-1 flex-grow rounded-full overflow-hidden ${isEmailTask ? 'bg-bento-blue/10' : 'bg-indigo-100'}`}>
+                                <div className={`h-full ${isEmailTask ? 'bg-bento-blue' : 'bg-indigo-400'}`} style={{ width: '100%' }} />
+                            </div>
+                            <span className={`text-[10px] font-black ${isEmailTask ? 'text-bento-blue' : 'text-indigo-500'}`}>
+                              {isEmailTask ? 'SEND' : 'READY'}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center space-y-2 opacity-30">
+                          <div className="mx-auto w-8 h-8 rounded-full border-2 border-slate-300 flex items-center justify-center">
+                            <Plus size={16} />
+                          </div>
+                          <p className="text-[8px] font-black uppercase tracking-widest">Drop Slot {index + 1}</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-6 text-[8px] font-bold text-slate-400 uppercase tracking-widest text-center">Drag quests or email icons here</p>
+            </section>
 
 
         {/* Bio-Metrics Hub: Unified Stamina & Recovery (Spans 1x1) */}
@@ -935,6 +989,7 @@ interface QuestCardProps {
   onComplete: (id: string, p: number) => void;
   onEmail: (a: Assignment) => Promise<void> | void;
   onDelete: (id: string) => void;
+  onUpdateWorkload: (id: string, workload: number) => void;
   isRecommended?: boolean;
   key?: string | number;
 }
@@ -944,86 +999,143 @@ function QuestCard({
   onComplete, 
   onEmail,
   onDelete,
+  onUpdateWorkload,
   isRecommended
 }: QuestCardProps) {
   const theme = getSubjectTheme(assignment.subject);
+  const [isWorkloadOpen, setIsWorkloadOpen] = useState(false);
 
   return (
     <motion.div 
       layout
       draggable
       onDragStart={(e) => {
+        // Don't drag if we're interaction with the workload slider
+        if (isWorkloadOpen) {
+          e.preventDefault();
+          return;
+        }
         e.dataTransfer.setData('assignmentId', assignment.id);
+        e.dataTransfer.setData('taskType', 'assignment');
         e.dataTransfer.effectAllowed = 'copy';
       }}
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
-      className={`relative p-6 rounded-[2rem] flex flex-col md:flex-row justify-between items-start md:items-center gap-6 transition-all border-2 ${
+      className={`relative p-6 rounded-[2rem] flex flex-col items-stretch gap-6 transition-all border-2 ${
         isRecommended 
           ? 'bg-white border-bento-blue shadow-[0_20px_40px_rgba(14,165,233,0.15)] z-10' 
           : `bg-white/80 ${theme.border} hover:border-slate-300 hover:bg-white shadow-sm hover:shadow-md`
       }`}
     >
-      <div className="absolute left-0 top-1/4 bottom-1/4 w-1 rounded-r-full" style={{ backgroundColor: theme.color }} />
-      
-      <div className="space-y-2 min-w-0 flex-1 pl-2">
-        <div className="flex flex-wrap items-center gap-2 mb-2">
-          {isRecommended && (
-            <span className="text-[8px] font-black px-2 py-1 rounded-lg bg-bento-blue text-white uppercase tracking-widest flex items-center gap-1 shadow-sm">
-              <Sparkles size={10} /> Optimal Target
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+        <div className="absolute left-0 top-1/4 bottom-1/4 w-1 rounded-r-full" style={{ backgroundColor: theme.color }} />
+        
+        <div className="space-y-2 min-w-0 flex-1 pl-2">
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            {isRecommended && (
+              <span className="text-[8px] font-black px-2 py-1 rounded-lg bg-bento-blue text-white uppercase tracking-widest flex items-center gap-1 shadow-sm">
+                <Sparkles size={10} /> Optimal Target
+              </span>
+            )}
+            <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${
+              assignment.priority >= 4 ? 'bg-rose-500 text-white' : 
+              assignment.priority === 3 ? 'bg-amber-500 text-white' : 'bg-emerald-500 text-white'
+            }`}>
+              {assignment.priority >= 4 ? 'CRITICAL THREAT' : assignment.priority === 3 ? 'MAJOR QUEST' : 'SIDE QUEST'}
             </span>
-          )}
-          <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${
-            assignment.priority >= 4 ? 'bg-rose-500 text-white' : 
-            assignment.priority === 3 ? 'bg-amber-500 text-white' : 'bg-emerald-500 text-white'
-          }`}>
-            {assignment.priority >= 4 ? 'CRITICAL THREAT' : assignment.priority === 3 ? 'MAJOR QUEST' : 'SIDE QUEST'}
-          </span>
-          <span className={`text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${theme.bg} ${theme.text}`}>
-            {assignment.subject}
-          </span>
+            <span className={`text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${theme.bg} ${theme.text}`}>
+              {assignment.subject}
+            </span>
+          </div>
+          <h3 className="text-xl font-black text-slate-900 tracking-tight leading-tight">
+            {assignment.title}
+          </h3>
+          <div className="flex flex-wrap items-center gap-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+            <span className="flex items-center gap-1 text-bento-green bg-bento-green/5 px-2 py-1 rounded-md">+{assignment.points} EXP</span>
+            <span className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md">
+              <AlertCircle size={12} className={assignment.dueDate && !isNaN(new Date(assignment.dueDate).getTime()) && new Date(assignment.dueDate) < new Date() ? 'text-rose-500' : 'text-slate-300'} /> 
+              Deadline: {assignment.dueDate && !isNaN(new Date(assignment.dueDate).getTime()) ? assignment.dueDate : 'No Due Date'}
+            </span>
+            <button 
+              onClick={() => setIsWorkloadOpen(!isWorkloadOpen)}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-all ${isWorkloadOpen ? 'bg-bento-blue text-white' : 'bg-slate-50 hover:bg-slate-100 text-slate-400 hover:text-slate-600'}`}
+            >
+              <Zap size={12} className={isWorkloadOpen ? 'text-white' : 'text-slate-300'} /> 
+              W-LOAD: {assignment.workload}
+            </button>
+          </div>
         </div>
-        <h3 className="text-xl font-black text-slate-900 tracking-tight leading-tight">
-          {assignment.title}
-        </h3>
-        <div className="flex flex-wrap items-center gap-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">
-           <span className="flex items-center gap-1 text-bento-green bg-bento-green/5 px-2 py-1 rounded-md">+{assignment.points} EXP</span>
-           <span className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md">
-             <AlertCircle size={12} className={assignment.dueDate && !isNaN(new Date(assignment.dueDate).getTime()) && new Date(assignment.dueDate) < new Date() ? 'text-rose-500' : 'text-slate-300'} /> 
-             Deadline: {assignment.dueDate && !isNaN(new Date(assignment.dueDate).getTime()) ? assignment.dueDate : 'No Due Date'}
-           </span>
-           <span className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md"><Zap size={12} className="text-slate-300" /> W-Load: {assignment.workload}</span>
+
+        <div className="flex items-center gap-3 shrink-0">
+          <button 
+            draggable
+            onDragStart={(e) => {
+              e.stopPropagation();
+              e.dataTransfer.setData('assignmentId', assignment.id);
+              e.dataTransfer.setData('taskType', 'email');
+              e.dataTransfer.effectAllowed = 'copy';
+            }}
+            onClick={() => onEmail(assignment)}
+            className="p-4 bg-slate-50 hover:bg-bento-blue hover:text-white text-slate-400 rounded-2xl transition-all shadow-sm active:scale-90 cursor-grab active:cursor-grabbing"
+          >
+            <Mail size={18} />
+          </button>
+          <button 
+            onClick={() => onDelete(assignment.id)}
+            className="p-4 bg-slate-50 hover:bg-rose-500 hover:text-white text-slate-400 rounded-2xl transition-all shadow-sm active:scale-90"
+          >
+            <X size={18} />
+          </button>
+          <button 
+            onClick={() => onComplete(assignment.id, assignment.points)}
+            className="bg-slate-900 group hover:bg-slate-800 px-8 py-4 rounded-[1.2rem] text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-slate-900/20 hover:scale-105 transition-all active:scale-95"
+          >
+            Finalize <ArrowRight size={14} className="inline ml-2 group-hover:translate-x-1 transition-transform" />
+          </button>
         </div>
       </div>
 
-      <div className="flex items-center gap-3 shrink-0">
-        <button 
-          onClick={() => onEmail(assignment)}
-          className="p-4 bg-slate-50 hover:bg-bento-blue hover:text-white text-slate-400 rounded-2xl transition-all shadow-sm active:scale-90"
-        >
-          <Mail size={18} />
-        </button>
-        <button 
-          onClick={() => onDelete(assignment.id)}
-          className="p-4 bg-slate-50 hover:bg-rose-500 hover:text-white text-slate-400 rounded-2xl transition-all shadow-sm active:scale-90"
-        >
-          <X size={18} />
-        </button>
-        <button 
-          onClick={() => onComplete(assignment.id, assignment.points)}
-          className="bg-slate-900 group hover:bg-slate-800 px-8 py-4 rounded-[1.2rem] text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-slate-900/20 hover:scale-105 transition-all active:scale-95"
-        >
-          Finalize <ArrowRight size={14} className="inline ml-2 group-hover:translate-x-1 transition-transform" />
-        </button>
-      </div>
+      <AnimatePresence>
+        {isWorkloadOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-t border-slate-100 pt-4 mt-2"
+          >
+            <div className="flex flex-col gap-4 p-4 bg-slate-50/50 rounded-2xl">
+              <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-slate-400">
+                <span>Adjust Workload Volume</span>
+                <span className="text-bento-blue bg-bento-blue/10 px-2 py-0.5 rounded-lg">{assignment.workload} / 5</span>
+              </div>
+              <div className="relative flex items-center gap-4 group">
+                <input 
+                  type="range" 
+                  min="1" 
+                  max="5" 
+                  step="1"
+                  value={assignment.workload}
+                  onChange={(e) => onUpdateWorkload(assignment.id, parseInt(e.target.value))}
+                  className="flex-grow h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-bento-blue"
+                />
+              </div>
+              <div className="flex justify-between text-[8px] font-black text-slate-300 uppercase tracking-widest">
+                <span>Quick</span>
+                <span>Difficult</span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
 
-function AssignmentForm({ onAdd, onCancel }: { onAdd: (t: string, s: string, p: number, w: number, d: string) => void, onCancel: () => void }) {
+function AssignmentForm({ onAdd, onCancel }: { onAdd: (t: string, s: string, p: number, w: number, d: string, teacher: string) => void, onCancel: () => void }) {
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState('');
+  const [teacherName, setTeacherName] = useState('');
   const [priority, setPriority] = useState(1);
   const [workload, setWorkload] = useState(3);
   const [dueDate, setDueDate] = useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
@@ -1042,7 +1154,7 @@ function AssignmentForm({ onAdd, onCancel }: { onAdd: (t: string, s: string, p: 
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="space-y-3 md:col-span-2">
+        <div className="space-y-3 md:col-span-1">
           <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Mission Name</label>
           <input 
             autoFocus
@@ -1051,6 +1163,16 @@ function AssignmentForm({ onAdd, onCancel }: { onAdd: (t: string, s: string, p: 
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-bento-blue focus:bg-white text-slate-800 placeholder:text-slate-300 transition-all font-bold"
+          />
+        </div>
+        <div className="space-y-3">
+          <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Teacher Name</label>
+          <input 
+            type="text" 
+            placeholder="Mr. Smith, etc..."
+            value={teacherName}
+            onChange={(e) => setTeacherName(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-bento-blue focus:bg-white text-slate-800 placeholder:text-slate-300 font-bold"
           />
         </div>
         <div className="space-y-3">
@@ -1115,7 +1237,7 @@ function AssignmentForm({ onAdd, onCancel }: { onAdd: (t: string, s: string, p: 
 
       <div className="flex gap-3">
         <button 
-          onClick={() => title && subject && onAdd(title, subject, priority, workload, dueDate)}
+          onClick={() => title && subject && onAdd(title, subject, priority, workload, dueDate, teacherName)}
           className="flex-1 bg-slate-900 text-white py-5 rounded-[1.5rem] font-black uppercase text-xs tracking-[0.2em] hover:scale-105 shadow-xl shadow-slate-900/20 transition-all active:scale-95"
         >
           Confirm Deployment

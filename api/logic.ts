@@ -66,44 +66,49 @@ async function fetchCanvasAssignments(canvasUrl: string, accessToken: string) {
     'User-Agent': 'Rebound-Tactical-Planner/1.0 (Educational App)'
   };
 
-  // 1. Fetch Courses
-  const coursesRes = await axios.get(`${canvasUrl}/api/v1/courses`, {
-    headers: commonHeaders,
-    params: { enrollment_state: 'active', per_page: 50 },
-    timeout: 8000 // Slightly tighter timeout for course list
-  });
-
-  const courses = Array.isArray(coursesRes.data) ? coursesRes.data : [];
-  if (courses.length === 0) return [];
-
-  // 2. Fetch Assignments for each active course
-  const coursePromises = courses
-    .filter((c: any) => c && c.id && (c.name || c.course_code))
-    .slice(0, 10) // Further reduced to 10 courses for free tier stability
-    .map(async (course: any) => {
-      try {
-        const assRes = await axios.get(`${canvasUrl}/api/v1/courses/${course.id}/assignments`, {
-          headers: commonHeaders,
-          params: { 
-            "all_assignments": true,
-            "order_by": "due_at",
-            "include[]": "submission"
-          },
-          timeout: 8000
-        });
-        
-        return (assRes.data || [])
-          .filter((a: any) => a.published && !a.locked_for_user)
-          .map((a: any) => ({
-            ...a,
-            courseName: (course.name || course.course_code || 'Academic').split(':').pop()?.trim()
-          }));
-      } catch (e) {
-        console.error(`Failed to fetch course ${course.id}`);
-        return [];
-      }
+  try {
+    // 1. Fetch Courses
+    const coursesRes = await axios.get(`${canvasUrl}/api/v1/courses`, {
+      headers: commonHeaders,
+      params: { enrollment_state: 'active', per_page: 50 },
+      timeout: 10000
     });
 
-  const results = await Promise.all(coursePromises);
-  return results.flat();
+    const courses = Array.isArray(coursesRes.data) ? coursesRes.data : [];
+    if (courses.length === 0) return [];
+
+    // 2. Fetch Assignments for each active course
+    const coursePromises = courses
+      .filter((c: any) => c && c.id && (c.name || c.course_code) && !c.access_restricted_by_date)
+      .slice(0, 15) // Process top 15 courses for stability
+      .map(async (course: any) => {
+        try {
+          const assRes = await axios.get(`${canvasUrl}/api/v1/courses/${course.id}/assignments`, {
+            headers: commonHeaders,
+            params: { 
+              "all_assignments": true,
+              "order_by": "due_at",
+              "include[]": "submission"
+            },
+            timeout: 12000
+          });
+          
+          return (assRes.data || [])
+            .filter((a: any) => a.published && !a.locked_for_user)
+            .map((a: any) => ({
+              ...a,
+              courseName: (course.name || course.course_code || 'Academic').split(':').pop()?.trim()
+            }));
+        } catch (e: any) {
+          console.error(`[Assignment Error] Course ${course.id}: ${e.response?.status || 'Timeout'} - ${e.message}`);
+          return [];
+        }
+      });
+
+    const results = await Promise.all(coursePromises);
+    return results.flat();
+  } catch (error: any) {
+    console.error('Error in fetchCanvasAssignments top-level:', error.message);
+    return [];
+  }
 }

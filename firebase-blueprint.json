@@ -27,6 +27,7 @@
         "points": { "type": "integer" },
         "status": { "type": "string" },
         "dueDate": { "type": "string" },
+        "teacherName": { "type": "string" },
         "source": { "type": "string" },
         "externalId": { "type": "string" }
       },

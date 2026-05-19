@@ -1,61 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
     // Default Deny
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helpers
-    function isSignedIn() { return request.auth != null; }
-    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
-
-    // User Data
     match /users/{userId} {
-      allow get: if isOwner(userId);
-      
-      match /config/main {
-        allow get: if isOwner(userId);
-        allow create, update: if isOwner(userId) && isValidConfig(request.resource.data);
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      match /{allPaths=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
       }
-      
-      match /quests/{questId} {
-        allow list: if isOwner(userId);
-        allow get: if isOwner(userId) && isValidId(questId);
-        allow create: if isOwner(userId) && isValidId(questId) && isValidQuest(request.resource.data);
-        allow update: if isOwner(userId) && isValidId(questId) && isValidQuest(request.resource.data) && (
-          // Allow status toggling (this covers undo too)
-          request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'points']) ||
-          // Allow full editing
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'subject', 'priority', 'workload', 'dueDate', 'points', 'status', 'source', 'externalId'])
-        );
-        allow delete: if isOwner(userId) && isValidId(questId);
-      }
-    }
-
-    function isValidConfig(data) {
-      return (data.keys().hasAny(['canvasUrl', 'mentalStamina', 'todoSlots', 'syncEnabled', 'lastSync'])) &&
-             (!data.keys().contains('canvasUrl') || (data.canvasUrl is string && data.canvasUrl.size() < 512)) &&
-             (!data.keys().contains('mentalStamina') || (data.mentalStamina is number && data.mentalStamina >= 0 && data.mentalStamina <= 100)) &&
-             (!data.keys().contains('todoSlots') || (data.todoSlots is list && data.todoSlots.size() == 3)) &&
-             (!data.keys().contains('syncEnabled') || (data.syncEnabled is bool)) &&
-             (!data.keys().contains('lastSync') || (data.lastSync is string));
-    }
-
-    function isValidQuest(data) {
-      let requiredFields = ['title', 'subject', 'priority', 'status'];
-      return data.keys().hasAll(requiredFields) &&
-             data.title is string && data.title.size() <= 200 &&
-             data.subject is string && data.subject.size() <= 100 &&
-             data.priority is int && data.priority >= 1 && data.priority <= 5 &&
-             data.status in ['todo', 'completed'] &&
-             (!data.keys().contains('workload') || (data.workload is int && data.workload >= 1 && data.workload <= 5)) &&
-             (!data.keys().contains('points') || (data.points is int)) &&
-             (!data.keys().contains('dueDate') || (data.dueDate is string)) &&
-             (!data.keys().contains('source') || (data.source is string)) &&
-             (!data.keys().contains('externalId') || (data.externalId is string));
     }
   }
 }
